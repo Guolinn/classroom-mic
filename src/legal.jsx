@@ -15,7 +15,10 @@ export function Footer() {
 }
 
 function Contact() {
-  return <p>For questions about this service or your personal information, contact Guolin at <a href={`mailto:${email}`}>{email}</a>. You can ask about access, correction, deletion, or raise a privacy concern. We may need enough information to identify your session and verify your request. Please do not send passwords or recordings of other people. Information that has already expired cannot be recovered.</p>;
+  return <>
+    <p>For questions about this service or your personal information, contact Guolin at <a href={`mailto:${email}`}>{email}</a>. You can ask about access, correction, deletion, or raise a privacy concern. We may need enough information to identify your session and verify your request. Please do not send passwords or recordings of other people. Information that has already expired cannot be recovered.</p>
+    <p>GitHub: <a href="https://github.com/Guolinn" target="_blank" rel="noopener noreferrer">Guolinn</a></p>
+  </>;
 }
 
 function Terms() {

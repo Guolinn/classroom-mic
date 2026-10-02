@@ -68,7 +68,7 @@ React provides the interface and one Node.js process manages rooms and permissio
 
 Rooms exist in memory and disappear when the server restarts. No audio recording, transcription, analytics tracker, or database is implemented. Relayed audio is encrypted in transit but can be accessed by the relay server. Room acoustics and speaker placement still affect feedback; software processing does not guarantee its removal.
 
-Read the [architecture](docs/architecture.md), [Terms of Service](https://classroom-mic.beringtech.com/terms), and [Privacy Policy](https://classroom-mic.beringtech.com/privacy).
+Read the [architecture](docs/architecture.md), [Terms of Service](https://classroom-mic.beringtech.com/terms), and [Privacy Policy](https://classroom-mic.beringtech.com/privacy). Both policy pages include the contact email and a link to [Guolinn's GitHub profile](https://github.com/Guolinn).
 
 ## Project files
 
