@@ -1,0 +1,43 @@
+# Architecture
+
+Repository: [Guolinn/classroom-mic](https://github.com/Guolinn/classroom-mic).
+
+## Components
+
+- React and Vite render the teacher, student, and policy pages.
+- One Node.js process serves the production files, creates rooms, and handles WebSocket signaling and fallback audio.
+- WebRTC normally sends the approved student's processed microphone audio directly to the teacher.
+- AudioWorklets process microphone samples and the PCM fallback. The teacher uses a native audio element for WebRTC playback; retain that playback path when changing the audio code.
+- A reverse proxy supplies HTTPS. The current deployment uses Caddy.
+
+## Audio flow
+
+```text
+Phone microphone -> browser capture processing -> high-pass filter / limiter
+                                              -> WebRTC -> teacher audio output
+                                              -> WSS relay -> teacher PCM playback
+Teacher computer -> classroom sound system
+```
+
+Only the approved student's microphone sends audio. Other students do not receive a monitoring stream. The server controls the active speaker and permission generation for fallback frames; connected clients stop audio when permissions change.
+
+## Audio and session behavior
+
+- WebRTC sends audio from the approved student to the teacher. No student receives classroom audio.
+- Microphone capture requests browser echo cancellation and noise suppression, mono audio, and a preferred 48 kHz sample rate. Automatic gain control is disabled where supported so pauses do not cause automatic amplification of background sound. These capture options depend on the browser and device.
+- Both audio paths use the same 80 Hz high-pass filter and a peak limiter with 3 ms lookahead, a 0.89 sample ceiling, and 60 ms gain recovery. The limiter has no makeup gain or noise gate: ordinary and quiet speech are not automatically amplified or cut off. This reduces rumble and limits signal peaks; it cannot repair sound already clipped by the microphone or guarantee feedback cancellation.
+- Speaker volume starts at 50%. Raw capture and processed output are disabled while waiting for approval; both stop on cancellation, mute, speaker changes, disconnection, or audio-processing failure. The phone never plays its own microphone signal.
+- If direct connectivity fails or cannot be established within 6.5 seconds, a same-origin WebSocket relays audio through the application server.
+- The relay uses mono PCM16 with 20 ms frames and an initial 60 ms playback buffer. At 48 kHz, one active relay uses about 0.8 Mbps in each direction. These are buffering settings, not an end-to-end latency guarantee; actual delay depends on devices, network conditions, and the speaker.
+- The server checks the active speaker and permission generation for each audio frame. Mute, speaker changes, and disconnection clear pending playback.
+- Classroom state is process-local. Use one process, not multiple replicas behind a load balancer. Horizontal scaling requires shared room state and cross-process routing.
+- Classes expire after 12 hours, or after the teacher has been offline for five minutes. Offline students are removed after ten minutes. Reloading the original teacher tab restores its session; closing the tab may discard its browser-scoped credential.
+- Permission tokens stay out of URLs and QR codes. Audio is not written to files or a database.
+- `ICE_SERVERS_JSON` can provide private TURN endpoints if needed. This value is delivered to class participants; use browser-safe, short-lived credentials and never a provider management API key.
+
+
+## Boundaries
+
+A class code permits joining; it does not establish a student's identity. Teacher and student session credentials authorize their respective controls. Run a single server process: room state is in memory and is lost on restart. A new teacher connection replaces the previous connection for the same session, so a separate TA or iPad controller is not implemented.
+
+No audio recording, transcription, analytics service, or database is implemented. The relay server can access the audio it relays. Browser echo cancellation does not have a direct reference to the separate teacher computer's loudspeaker output; room feedback still depends on placement, levels, and the sound system.

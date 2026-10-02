@@ -1,0 +1,39 @@
+services:
+  app:
+    build: .
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      PUBLIC_URL: https://${DOMAIN:?Set DOMAIN in .env}
+      HOST_PASSWORD: ${HOST_PASSWORD:-}
+      MAX_ROOMS: ${MAX_ROOMS:-100}
+      MAX_STUDENTS: ${MAX_STUDENTS:-300}
+      TRUST_PROXY: "1"
+      ICE_SERVERS_JSON: ${ICE_SERVERS_JSON:-}
+    expose:
+      - "3000"
+    init: true
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      DOMAIN: ${DOMAIN:?Set DOMAIN in .env}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - app
+volumes:
+  caddy_data:
+  caddy_config:

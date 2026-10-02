@@ -1,0 +1,21 @@
+node_modules/
+dist/
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+.npmrc
+.ssh/
+secrets/
+credentials/
+test-results/
+playwright-report/
+coverage/
+*.log
+.DS_Store
+# Owner-specific operational records stay local. Portable docs live in docs/.
+/DEPLOYMENT.md
+/VERIFICATION.json

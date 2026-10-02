@@ -1,0 +1,39 @@
+{
+  "name": "classroom-mic",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "scripts": {
+    "dev": "node server/index.mjs",
+    "build": "vite build",
+    "start": "NODE_ENV=production node server/index.mjs",
+    "test": "node --test test/*.test.mjs",
+    "test:browser": "node test/browser.mjs"
+  },
+  "dependencies": {
+    "lucide-react": "^1.31.0",
+    "qrcode": "^1.5.4",
+    "react": "19.2.6",
+    "react-dom": "19.2.6",
+    "ws": "^8.18.3"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.58.2",
+    "@vitejs/plugin-react": "6.0.2",
+    "vite": "^8.3.2"
+  },
+  "description": "Phone microphones for classrooms with teacher-controlled speaking permissions.",
+  "author": "Guolin",
+  "license": "UNLICENSED",
+  "homepage": "https://classroom-mic.beringtech.com",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Guolinn/classroom-mic.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Guolinn/classroom-mic/issues"
+  }
+}
