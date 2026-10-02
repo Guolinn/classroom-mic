@@ -35,7 +35,7 @@ npm ci
 npm run dev
 ```
 
-The repository is currently private, so cloning requires access to the GitHub account or repository. Open `http://localhost:3000` and use separate browser tabs for teacher and student. Physical phones require HTTPS; an ordinary HTTP LAN address will not grant microphone access.
+The repository is public and can be viewed or cloned without signing in. Open `http://localhost:3000` and use separate browser tabs for teacher and student. Physical phones require HTTPS; an ordinary HTTP LAN address will not grant microphone access.
 
 For a local production build:
 
@@ -88,4 +88,4 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for the development workflow and [SECURIT
 
 ## License
 
-This repository is currently private and has not been released under an open-source license. Publishing the website does not grant a license to redistribute its source. Dependency licenses remain applicable to their respective packages.
+The source is publicly visible but has not been released under an open-source license. Dependency licenses remain applicable to their respective packages.

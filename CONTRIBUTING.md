@@ -2,7 +2,7 @@
 
 Repository: [Guolinn/classroom-mic](https://github.com/Guolinn/classroom-mic).
 
-This is currently a private project. Collaborators can create a branch and submit a pull request. Keep changes focused and explain the user-visible behavior in the pull request description.
+The repository is public. Use an issue to discuss a proposed change or report a bug. Collaborators can create a branch and submit a pull request. Keep changes focused and explain the user-visible behavior in the pull request description.
 
 Use Node.js 24, install dependencies with `npm ci`, and start development with `npm run dev`. Run `npm test` and `npm run build` before submitting code changes. For changes to microphone permissions, audio transport, or room controls, also run the existing browser scenarios described in [verification](docs/verification.md).
 
