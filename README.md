@@ -1,4 +1,4 @@
-# Classroom mic
+# MicTurn
 
 Use a phone as a classroom microphone. The teacher opens the website on a computer connected to the room speakers. Students scan a QR code, request to speak, and transmit audio when the teacher allows it.
 

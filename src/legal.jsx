@@ -10,7 +10,7 @@ export function PolicyLink({ type, children }) {
 export function Footer() {
   return <footer className="site-footer">
     <span>Made by Guolin in UBC</span>
-    <nav aria-label="Legal"><PolicyLink type="terms">ToS</PolicyLink><PolicyLink type="privacy">PP</PolicyLink></nav>
+    <nav aria-label="Legal"><PolicyLink type="terms">Terms of Service</PolicyLink><PolicyLink type="privacy">Privacy Policy</PolicyLink></nav>
   </footer>;
 }
 
@@ -85,7 +85,7 @@ function Privacy() {
 
 export function LegalPage({ type }) {
   const title = type === 'terms' ? 'Terms of Service' : 'Privacy Policy';
-  useEffect(() => { document.title = `${title} · Class microphone`; return () => { document.title = 'Class microphone'; }; }, [title]);
+  useEffect(() => { document.title = `${title} · MicTurn`; return () => { document.title = 'MicTurn'; }; }, [title]);
   return <main className="legal-page">
     <a className="legal-back" href="/">Back to microphone</a>
     <h1>{title}</h1><p className="legal-date">Last updated {updated}</p>

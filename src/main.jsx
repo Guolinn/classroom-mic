@@ -39,6 +39,11 @@ function Home({ go, joinCode = '' }) {
     } catch (e) { setError(e.message); } finally { setBusy(false); }
   }
   return <main className="home">
+    <a className="home-brand" href="/" aria-label="MicTurn home">
+      <svg viewBox="92 330 1352 310" width="124" height="29" aria-hidden="true" focusable="false">
+        <image href="/brand/micturn-wordmark.png" width="1536" height="1024" />
+      </svg>
+    </a>
     <div className="tabs" aria-label="Role">
       <button aria-pressed={role === 'host'} onClick={() => { setRole('host'); setError(''); }}>Teacher</button>
       <button aria-pressed={role === 'student'} onClick={() => { setRole('student'); setError(''); }}>Student</button>
@@ -54,7 +59,7 @@ function Home({ go, joinCode = '' }) {
         <label htmlFor="name">Your name</label><input id="name" autoComplete="given-name" value={name} maxLength={24} required onChange={e => setName(e.target.value)} />
       </>}
       <button className="primary full" disabled={busy}>{busy ? 'Please wait…' : role === 'host' ? 'Create class' : 'Join class'}</button>
-      <p className="entry-notice">By continuing, you agree to the <PolicyLink type="terms">Terms</PolicyLink>. Read <PolicyLink type="privacy">Privacy</PolicyLink>.</p>
+      <p className="entry-notice">By continuing, you agree to the <PolicyLink type="terms">Terms of Service</PolicyLink>. Read our <PolicyLink type="privacy">Privacy Policy</PolicyLink>.</p>
       <Notice error>{error}</Notice>
     </form>
   </main>;
