@@ -59,15 +59,16 @@ try {
   await expect(h.locator('.queue')).toContainText('Alex');
   await h.getByRole('button',{name:'Allow',exact:true}).click();
   await expect(s.getByRole('button',{name:'Stop speaking',exact:true})).toBeVisible();
-  await expect.poll(()=>h.evaluate(async()=>[...(await window.__testPeers.at(-1).getStats()).values()].filter(r=>r.type==='inbound-rtp').some(r=>r.totalAudioEnergy>0&&r.packetsReceived>30)),{timeout:15000}).toBe(true);
+  await expect.poll(()=>h.evaluate(async()=>{const peer=window.__testPeers.at(-1);return peer?[...(await peer.getStats()).values()].filter(r=>r.type==='inbound-rtp').some(r=>r.totalAudioEnergy>0&&r.packetsReceived>30):false;}),{timeout:15000}).toBe(true);
   await hasSound(h);
   const processing = await s.evaluate(() => {
-    const filter=window.__testFilters.at(-1), magnitude=new Float32Array(3);
+    const filter=window.__testFilters.filter(f=>f.type==='highpass').at(-1), magnitude=new Float32Array(3);
     filter.getFrequencyResponse(new Float32Array([30,300,1000]),magnitude,new Float32Array(3));
     const track=window.__testPeers.at(-1).getSenders().find(s=>s.track?.kind==='audio')?.track;
     return { constraints:window.__testConstraints.at(-1).audio, settings:window.__testStreams.at(-1).getAudioTracks()[0].getSettings(), response:[...magnitude], sendsProcessedAudio:window.__testProcessedStreams.some(s=>s.getTracks().includes(track)) };
   });
   expect(processing.constraints.autoGainControl).toBe(false);expect(processing.settings.autoGainControl).toBe(false);
+  expect(processing.constraints.voiceIsolation.ideal).toBe(true);expect(processing.constraints.latency.ideal).toBe(.01);
   expect(processing.settings.echoCancellation).toBe(true);expect(processing.settings.noiseSuppression).toBe(true);
   expect(processing.response[0]).toBeLessThan(.2);expect(processing.response[1]).toBeGreaterThan(.99);expect(processing.response[2]).toBeGreaterThan(.99);
   expect(processing.sendsProcessedAudio).toBe(true);
@@ -75,6 +76,24 @@ try {
   const rtc=await h.evaluate(async()=>{const reports=await window.__testPeers.at(-1).getStats();return [...reports.values()].filter(r=>r.type==='inbound-rtp').map(r=>({bytesReceived:r.bytesReceived,packetsReceived:r.packetsReceived,kind:r.kind}))});
   if(!rtc.some(r=>r.kind==='audio'&&r.bytesReceived>0))throw new Error('No actual WebRTC audio received');
   results.push({scenario:'WebRTC audio',reports:rtc});
+  // The generated microphone is a sustained 440 Hz tone. Verify that the real
+  // analyser and detector activate a narrow cut while audio keeps arriving.
+  await expect.poll(()=>s.evaluate(()=>window.__testFilters.filter(f=>f.type==='peaking').some(f=>f.gain.value < -8)),{timeout:5000}).toBe(true);
+  await hasSound(h);
+  const feedback = await s.evaluate(async () => {
+    const ctx = new OfflineAudioContext(1, 48000, 48000);
+    const oscillator = ctx.createOscillator(), cut = ctx.createBiquadFilter();
+    oscillator.frequency.value = 1200;
+    cut.type = 'peaking'; cut.frequency.value = 1200; cut.Q.value = 18; cut.gain.value = -9;
+    oscillator.connect(cut); cut.connect(ctx.destination); oscillator.start();
+    const rendered = await ctx.startRendering(), samples = rendered.getChannelData(0).slice(24000);
+    return { amplitude:Math.sqrt(samples.reduce((sum,x)=>sum+x*x,0)/samples.length)*Math.SQRT2,
+      streamingFilters:window.__testFilters.filter(f=>f.type==='peaking').length };
+  });
+  expect(feedback.amplitude).toBeGreaterThan(.34);expect(feedback.amplitude).toBeLessThan(.37);expect(feedback.streamingFilters).toBe(2);
+  const jitterTarget=await h.evaluate(()=>window.__testPeers.at(-1).getReceivers().map(r=>'jitterBufferTarget' in r?r.jitterBufferTarget:null));
+  expect(jitterTarget.every(t=>t===null||t===20)).toBe(true);
+  results.push({scenario:'Conservative feedback filters and low-latency receiver preference',pass:true,feedback,jitterTarget});
   await h.screenshot({path:'test-results/host-desktop.png',fullPage:true});await s.screenshot({path:'test-results/student-mobile.png',fullPage:true});
   const second=await join(sc,code,'Jordan');await second.getByRole('button',{name:'Request to speak',exact:true}).click();
   await h.getByRole('button',{name:'Switch speaker',exact:true}).click();

@@ -10,6 +10,7 @@ The following results were recorded on October 2, 2026:
 - Seven browser scenarios passed against the public deployment, using generated microphone audio and separate browser contexts.
 - Terms and Privacy pages, contact links, separate-tab navigation, and mobile overflow were checked during the legal-page update.
 - The subsequent two-line footer update built successfully and the server health check passed. Its fresh browser visual check was unavailable because the browser tool could not complete its security check.
+- The echo/feedback update passed eight local audio and playback unit tests, including four new regressions for sustained tones, speech/noise preservation, stale WebRTC callbacks, and relay backlog recovery. Eight browser scenarios passed against the local production build. The actual microphone analyser activated a cut on the generated sustained tone while transmission stayed audible; offline rendering measured the intended 9 dB cut. The browser accepted the 20 ms receiver target but did not apply optional voice isolation on the test device. These checks do not measure acoustic echo removal in a room.
 
 These are automated or browser checks, not measurements of a physical classroom. Physical iPhone and Android devices, campus Wi-Fi, BRCS 1030's sound system, acoustic feedback, and end-to-end acoustic latency have not been verified.
 

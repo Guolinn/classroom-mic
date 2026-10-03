@@ -1,3 +1,5 @@
+import { FeedbackGuard } from './feedback.js';
+
 export class ClassroomAudio {
   constructor(role, send, binary, update) {
     this.role = role; this.send = send; this.binary = binary; this.update = update;
@@ -51,7 +53,7 @@ export class ClassroomAudio {
         this.voiceLoaded = true;
       }
       if (this.destroyed || generation !== this.prepareGeneration) throw new Error('Cancelled. Request to speak again.');
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: false, channelCount: { ideal: 1 }, sampleRate: { ideal: 48000 } }, video: false });
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, voiceIsolation: { ideal: true }, autoGainControl: false, latency: { ideal: .01 }, channelCount: { ideal: 1 }, sampleRate: { ideal: 48000 } }, video: false });
       if (this.destroyed || generation !== this.prepareGeneration) { stream.getTracks().forEach(t => t.stop()); throw new Error('Cancelled. Request to speak again.'); }
       this.stream = stream;
       stream.getAudioTracks().forEach(t => { t.enabled = false; t.onended = () => {
@@ -76,7 +78,8 @@ export class ClassroomAudio {
       this.processedStream = this.processedDestination.stream;
       this.processedStream.getTracks().forEach(t => { t.enabled = false; });
       this.micAnalyser = this.ctx.createAnalyser(); this.micAnalyser.fftSize = 256;
-      this.micSource.connect(this.highpass); this.highpass.connect(processor);
+      this.micSource.connect(this.highpass);
+      this.feedbackGuard = new FeedbackGuard(this.ctx, this.highpass, processor, () => !!this.grant && this.stream === stream);
       processor.connect(this.processedDestination); processor.connect(this.micAnalyser);
       // No microphone signal is connected to the phone's speakers.
       this.status('');
@@ -94,6 +97,7 @@ export class ClassroomAudio {
     this.processedStream?.getTracks().forEach(t => t.stop()); this.processedStream = null;
     this.micSource?.disconnect(); this.micSource = null;
     this.highpass?.disconnect(); this.highpass = null;
+    this.feedbackGuard?.stop(); this.feedbackGuard = null;
     if (this.voiceProcessor) {
       this.voiceProcessor.removeEventListener('processorerror', this.voiceError); this.voiceError = null;
       this.voiceProcessor.port.postMessage('stop'); this.voiceProcessor.port.close();
@@ -104,7 +108,7 @@ export class ClassroomAudio {
   }
   cleanupConnection() {
     clearTimeout(this.fallbackTimer); clearTimeout(this.disconnectTimer);
-    if (this.pc) { this.pc.onconnectionstatechange = null; this.pc.close(); this.pc = null; }
+    if (this.pc) { this.pc.onconnectionstatechange = null; this.pc.ontrack = null; this.pc.onicecandidate = null; this.pc.close(); this.pc = null; }
     this.remoteSource?.disconnect(); this.remoteSource = null;
     this.remoteAnalyser?.disconnect(); this.remoteAnalyser = null;
     this.remoteSilent?.disconnect(); this.remoteSilent = null;
@@ -139,19 +143,27 @@ export class ClassroomAudio {
       this.candidates = [];
       pc.onicecandidate = e => { if (e.candidate && this.grant === newGrant) this.send({ type: 'rtc', grant: newGrant, candidate: e.candidate.toJSON() }); };
       pc.ontrack = async e => {
-        if (this.role !== 'host' || this.grant !== newGrant) return;
+        const current = () => !this.destroyed && this.role === 'host' && this.pc === pc && this.mode === 'direct' && this.grant === newGrant && this.desiredGrant === newGrant && this.desiredMode === 'direct';
+        if (!current() || e.track.kind !== 'audio') return;
+        // Prefer a short playout buffer; browsers may increase it when the
+        // network needs more recovery time, or ignore unsupported preferences.
+        try { if ('jitterBufferTarget' in e.receiver) e.receiver.jitterBufferTarget = 20; } catch {}
         const ctx = await this.context();
-        if (this.grant !== newGrant) return;
+        // A fallback can replace this peer while AudioContext.resume awaits.
+        // Never resurrect its native audio element alongside relay playback.
+        if (!current()) return;
         const stream = e.streams[0] || new MediaStream([e.track]);
         // Use the native media element for remote WebRTC playout. A separate,
         // silent Web Audio branch measures levels without doubling the sound.
-        if (this.remoteAudio) { this.remoteAudio.pause(); this.remoteAudio.remove(); }
+        if (this.remoteAudio) { this.remoteAudio.pause(); this.remoteAudio.srcObject = null; this.remoteAudio.remove(); }
         this.remoteAudio = document.createElement('audio');
         this.remoteAudio.volume = this.volume; this.remoteAudio.autoplay = true;
         this.remoteAudio.setAttribute('playsinline', ''); this.remoteAudio.hidden = true;
         this.remoteAudio.srcObject = stream; document.body.append(this.remoteAudio);
-        this.remoteAudio.play().catch(() => this.status('Click Test speaker to enable playback.'));
+        const audio = this.remoteAudio;
+        audio.play().catch(() => { if (current() && this.remoteAudio === audio) this.status('Click Test speaker to enable playback.'); });
         this.remoteSource?.disconnect();
+        this.remoteAnalyser?.disconnect(); this.remoteSilent?.disconnect();
         this.remoteSource = ctx.createMediaStreamSource(stream);
         this.remoteAnalyser = ctx.createAnalyser(); this.remoteAnalyser.fftSize = 256;
         this.remoteSilent = ctx.createGain(); this.remoteSilent.gain.value = 0;
@@ -220,9 +232,9 @@ export class ClassroomAudio {
     const audio = this.ctx.createBuffer(1, length, rate), samples = audio.getChannelData(0);
     for (let i = 0; i < length; i++) samples[i] = view.getInt16(8 + i * 2, true) / 32768;
     const now = this.ctx.currentTime;
-    if (!this.playAt || this.playAt < now || this.playAt > now + .35) {
-      for (const s of this.sources) { try { s.stop(); } catch {} } this.sources.clear();
-      this.playAt = now + .06;
+    if (!this.playAt || this.playAt < now || this.playAt > now + .12) {
+      for (const s of this.sources) { try { s.stop(); } catch {} s.disconnect(); } this.sources.clear();
+      this.playAt = now + .04;
     }
     const source = this.ctx.createBufferSource(); source.buffer = audio; source.connect(this.gain);
     this.sources.add(source); source.onended = () => { this.sources.delete(source); source.disconnect(); };

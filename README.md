@@ -64,7 +64,7 @@ See [verification](docs/verification.md) for prerequisites and what the checks c
 
 ## How it works
 
-React provides the interface and one Node.js process manages rooms and permissions. WebRTC carries microphone audio to the teacher; if a direct connection fails, a same-origin WebSocket relays audio through the server. Both paths use a high-pass filter and peak limiter. Browser noise suppression and echo cancellation are requested where supported.
+React provides the interface and one Node.js process manages rooms and permissions. WebRTC carries microphone audio to the teacher; if a direct connection fails, a same-origin WebSocket relays audio through the server. Both paths use a high-pass filter, up to two narrow cuts for persistent feedback tones, and a peak limiter. Browser noise suppression, echo cancellation, and optional voice isolation are requested where supported. Playback favors short buffers and discards accumulated relay audio instead of replaying a long backlog.
 
 Rooms exist in memory and disappear when the server restarts. No audio recording, transcription, analytics tracker, or database is implemented. Relayed audio is encrypted in transit but can be accessed by the relay server. Room acoustics and speaker placement still affect feedback; software processing does not guarantee its removal.
 
