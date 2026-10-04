@@ -20,7 +20,7 @@ The phone sends audio through the network; it does not need to pair with the com
 
 ## Status
 
-The website is deployed. Server and audio unit tests and browser scenarios have passed; actual phones, campus Wi-Fi, classroom feedback, and end-to-end acoustic latency have not been verified. See [verification](docs/verification.md) for the scope of each check.
+The website is deployed. The owner has tried iPhone Safari and Mac Chrome with wired classroom speakers and reported noticeable delay. Controlled measurements of the complete classroom audio path are still needed. See [verification](docs/verification.md) for the scope of automated and browser checks.
 
 GitHub stores the source and runs build checks. A push does not automatically deploy or restart the live website.
 
@@ -61,6 +61,8 @@ npm run test:browser
 ```
 
 See [verification](docs/verification.md) for prerequisites and what the checks cover.
+
+To investigate delay, open **Audio details** during a speaking turn on both devices. It shows the transport in use and supported measurements for individual audio stages. **Copy details** copies those measurements locally; it does not record or upload audio. Missing browser metrics are shown as unavailable. The displayed values are not total microphone-to-speaker latency. See [latency investigation](docs/latency-investigation.md) for measurements, the relay-buffer change, and remaining physical checks. Both devices must reload to use the October 4 update.
 
 ## How it works
 

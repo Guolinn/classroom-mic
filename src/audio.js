@@ -1,4 +1,5 @@
 import { FeedbackGuard } from './feedback.js';
+import { PcmPlayout } from './pcm-playout.js';
 
 export class ClassroomAudio {
   constructor(role, send, binary, update) {
@@ -6,6 +7,7 @@ export class ClassroomAudio {
     this.grant = 0; this.mode = 'direct'; this.sources = new Set(); this.queue = Promise.resolve();
     this.iceServers = [{ urls: 'stun:stun.cloudflare.com:3478' }];
     this.volume = .5; this.destroyed = false;
+    this.playout = new PcmPlayout();
   }
   status(status, extra = {}) { if (!this.destroyed) this.update({ status, ...extra }); }
   async context() {
@@ -116,7 +118,7 @@ export class ClassroomAudio {
     if (this.worklet) { this.worklet.port.onmessage = null; this.worklet.port.postMessage('stop'); this.worklet.port.close(); this.worklet.disconnect(); try { this.voiceProcessor?.disconnect(this.worklet); } catch {} this.worklet = null; }
     this.zero?.disconnect(); this.zero = null;
     for (const source of this.sources) { try { source.stop(); } catch {} source.disconnect(); }
-    this.sources.clear(); this.playAt = 0; this.candidates = [];
+    this.sources.clear(); this.playout.reset(); this.playAt = 0; this.candidates = [];
     this.stream?.getTracks().forEach(t => { t.enabled = false; });
     this.processedStream?.getTracks().forEach(t => { t.enabled = false; });
   }
@@ -224,21 +226,21 @@ export class ClassroomAudio {
     } catch { this.send({ type: 'finish' }); this.stopAll(); this.status('Audio relay unavailable. Retry in an up-to-date Safari or Chrome browser.'); }
   }
   receivePcm(buffer) {
-    if (!this.ctx || this.role !== 'host' || this.mode !== 'relay' || !this.grant) return;
+    if (!this.ctx || this.ctx.state !== 'running' || this.role !== 'host' || this.mode !== 'relay' || !this.grant) return;
     const view = new DataView(buffer);
-    if (view.byteLength < 10 || view.getUint32(0, true) !== this.grant) return;
+    if (view.byteLength < 10 || view.byteLength % 2 || view.getUint32(0, true) !== this.grant) return;
     const rate = view.getUint32(4, true), length = (view.byteLength - 8) / 2;
-    if (rate < 8000 || rate > 96000) return;
+    if (rate < 8000 || rate > 96000 || length / rate > .04) return;
+    const scheduled = this.playout.schedule(this.ctx.currentTime, length / rate);
+    if (!scheduled) return;
     const audio = this.ctx.createBuffer(1, length, rate), samples = audio.getChannelData(0);
     for (let i = 0; i < length; i++) samples[i] = view.getInt16(8 + i * 2, true) / 32768;
-    const now = this.ctx.currentTime;
-    if (!this.playAt || this.playAt < now || this.playAt > now + .12) {
+    if (scheduled.reset) {
       for (const s of this.sources) { try { s.stop(); } catch {} s.disconnect(); } this.sources.clear();
-      this.playAt = now + .04;
     }
     const source = this.ctx.createBufferSource(); source.buffer = audio; source.connect(this.gain);
     this.sources.add(source); source.onended = () => { this.sources.delete(source); source.disconnect(); };
-    source.start(this.playAt); this.playAt += audio.duration;
+    source.start(scheduled.at); this.playAt = this.playout.playAt;
   }
   async destroy() { this.destroyed = true; this.stopAll(); clearInterval(this.meter); await this.ctx?.close(); }
 }

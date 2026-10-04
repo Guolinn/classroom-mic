@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client';
 import { Mic, MicOff, Volume2, Maximize2, X, Copy, Check, Hand, Pause, Play, LogOut } from 'lucide-react';
 import QRCode from 'qrcode';
 import { ClassroomAudio } from './audio';
+import { AudioDetails } from './audio-details';
 import { Footer, LegalPage, PolicyLink } from './legal';
 import './styles.css';
 
@@ -156,6 +157,7 @@ function Host({ room, go }) {
           <h2>{state.activeId ? state.activeName : state.paused ? 'Requests paused' : 'No active microphone'}</h2>
           {state.activeId && <><Meter level={audio.level} /><button className="danger-button" onClick={mute}><MicOff size={18} />Mute</button></>}
           {state.activeId && <Notice>{audio.status}</Notice>}
+          <AudioDetails engine={engine} />
         </div>
         <div className="section-heading"><h2>Requests <span>{queue.length}</span></h2>
           <button className="text-button" disabled={!connected} onClick={() => { if (!state.paused) engine.current.stopAll(); send({ type: 'pause', paused: !state.paused }); }}>{state.paused ? <Play size={16} /> : <Pause size={16} />}{state.paused ? 'Resume requests' : 'Pause requests'}</button>
@@ -207,6 +209,7 @@ function Student({ room, session, go }) {
     <Notice>{audio.status}</Notice>
     <Notice error>{error}</Notice>
     <p className="student-tip">{active ? 'Hold your phone close to your mouth and away from speakers. Keep this page open and your screen unlocked.' : waiting ? 'Your microphone stays off until the teacher approves. You can cancel your request.' : 'Requesting to speak lets your teacher turn on your microphone for this turn.'}</p>
+    <AudioDetails engine={engine} />
   </main>;
 }
 function Loading({ go }) { return <main className="end"><h1>Loading class…</h1><button className="outline" onClick={() => go('/')}>Back</button></main>; }

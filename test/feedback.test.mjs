@@ -84,7 +84,7 @@ test('relay discards accumulated old audio and keeps normal playback continuous'
   engine.grant = 7; engine.mode = 'relay'; engine.gain = {};
   const scheduled = [];
   engine.ctx = {
-    currentTime: 1,
+    currentTime: 1, state: 'running',
     createBuffer(channels, length, rate) { return { duration: length / rate, getChannelData: () => new Float32Array(length) }; },
     createBufferSource() {
       const source = { connect() {}, disconnect() {}, stop() { this.stopped = true; }, start(time) { this.startTime = time; } };
@@ -105,5 +105,9 @@ test('relay discards accumulated old audio and keeps normal playback continuous'
   assert.equal(normal.length, 30);
   assert.equal(normal.some(s => s.stopped), false, 'normal arrivals should not be dropped');
   for (let i = 1; i < normal.length; i++) assert.ok(Math.abs(normal[i].startTime - normal[i - 1].startTime - .02) < .000001);
+  engine.ctx.state = 'suspended';
+  engine.receivePcm(frame);
+  assert.equal(scheduled.length, previousCount + 30, 'suspended output must not accumulate audio');
   engine.cleanupConnection();
+  assert.equal(engine.playout.target, .02, 'new speakers must start with a fresh buffer');
 });
