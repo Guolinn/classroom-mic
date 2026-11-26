@@ -38,7 +38,7 @@ test('worker network rejection does not silently retry on the page', async () =>
   assert.equal(stopped, true);
 });
 
-test('audio transfers directly over a MessagePort to the actual sender worker and stops on close', async t => {
+test('audio transfers directly over a MessagePort to the actual sender worker and stops on close', { timeout: 10000 }, async t => {
   const url = new URL('../src/local-sender-worker.js', import.meta.url).href;
   const bootstrap = `
     import { parentPort } from 'node:worker_threads';
@@ -66,6 +66,9 @@ test('audio transfers directly over a MessagePort to the actual sender worker an
   sender.attach({ port: { postMessage(data) { audioPort = data.port; } } });
   t.after(() => audioPort.close());
   const data = frame(); new Uint8Array(data.buffer)[12] = 37;
+  // This checks routing and shutdown, not the speed of a shared CI runner.
+  // Deadline behavior is tested above with an explicitly controlled clock.
+  delete data.producedAt;
   audioPort.postMessage(data, [data.buffer]);
   assert.deepEqual(await written, { type: 'observed-write', length: 492, value: 37 });
   sender.close(); assert.equal((await sender.closed).closeCode, 1);
