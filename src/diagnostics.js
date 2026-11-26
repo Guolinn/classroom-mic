@@ -33,6 +33,8 @@ export class AudioDiagnostics {
       localClockCorrectionPpm: signedValue(localOutput?.clockCorrectionPpm),
       localMaxOutputGapMs: value(localOutput?.maxOutputGapMs),
       localOutputBlockMs: value(localOutput?.outputBlockMs),
+      localCatchupEvents: value(localOutput?.catchups),
+      localCatchupMs: milliseconds(value(localOutput?.compressedSamples) === null ? undefined : localOutput.compressedSamples / 48000),
       localSent: active && mode === 'local' && engine.role === 'student' ? value(engine.localSent) : null,
       localSenderPath: sender?.path ?? null,
       localMaxCaptureGapMs: value(sender?.maxCaptureGapMs),

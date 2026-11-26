@@ -17,13 +17,15 @@ type sampleClock struct {
 }
 
 func newSampleClock() sampleClock { return sampleClock{rate: 1, goal: 1} }
-func (c *sampleClock) observe(queued int, now time.Time) {
+func (c *sampleClock) observe(queued int, now time.Time) bool {
+	updated := false
 	if c.window.IsZero() {
 		c.window, c.low, c.high = now, queued, queued
 	}
 	c.low = min(c.low, queued)
 	c.high = max(c.high, queued)
 	if now.Sub(c.window) >= time.Second {
+		updated = true
 		c.floorMs, c.peakMs = float64(c.low)/48, float64(c.high)/48
 		c.measured = true
 		errorSeconds := float64(c.low-frameSamples) / rate
@@ -35,4 +37,5 @@ func (c *sampleClock) observe(queued int, now time.Time) {
 	}
 	// Smooth speed changes across output callbacks. Limit is +/-0.2%.
 	c.rate += (c.goal - c.rate) * .02
+	return updated
 }

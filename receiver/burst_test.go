@@ -39,6 +39,9 @@ func TestLargeArrivalBatchesPreserveAudio(t *testing.T) {
 		if s.Trims != 0 || s.Resets != 0 || s.Underruns > 3 || s.Played < 948000 {
 			t.Errorf("arrival batching discarded speech or repeatedly interrupted playback: %+v", s)
 		}
+		if s.Catchups != 0 {
+			t.Fatal("transient arrival bursts must not trigger time compression")
+		}
 		if s.QueueMs > 120 || s.TargetMs > 20 {
 			t.Errorf("queue exceeded the bounded burst allowance: %+v", s)
 		}

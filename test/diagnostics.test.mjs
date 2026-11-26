@@ -92,7 +92,7 @@ test('capture diagnostics report applied settings rather than requested preferen
 });
 
 test('local clock and output diagnostics preserve negative correction and support older receivers', async () => {
-  const engine = { role: 'host', grant: 1, mode: 'local', localReceiver: { version: '0.1.3', stats: { queueFloorMs: 4, queuePeakMs: 102, clockCorrectionPpm: -500, maxOutputGapMs: 80, outputBlockMs: 128 / 48, address: 'private-address', key: 'secret' } } };
+  const engine = { role: 'host', grant: 1, mode: 'local', localReceiver: { version: '0.1.4', stats: { queueFloorMs: 4, queuePeakMs: 102, clockCorrectionPpm: -500, maxOutputGapMs: 80, outputBlockMs: 128 / 48, catchups: 3, compressedSamples: 1440, address: 'private-address', key: 'secret' } } };
   const sampler = new AudioDiagnostics();
   const report = await sampler.sample(engine);
   assert.equal(report.localClockCorrectionPpm, -500);
@@ -100,11 +100,14 @@ test('local clock and output diagnostics preserve negative correction and suppor
   assert.equal(report.localQueuePeakMs, 102);
   assert.equal(report.localMaxOutputGapMs, 80);
   assert.equal(report.localOutputBlockMs, 128 / 48);
+  assert.equal(report.localCatchupEvents, 3);
+  assert.equal(report.localCatchupMs, 30);
   assert.ok(!JSON.stringify(report).includes('private-address'));
   assert.ok(!JSON.stringify(report).includes('secret'));
   engine.localReceiver.stats = {};
   assert.equal((await sampler.sample(engine)).localQueueFloorMs, null);
   assert.equal((await sampler.sample(engine)).localClockCorrectionPpm, null);
+  assert.equal((await sampler.sample(engine)).localCatchupMs, null);
   engine.grant = 0;
   assert.equal((await sampler.sample(engine)).localMaxOutputGapMs, null);
 });

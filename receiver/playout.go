@@ -31,25 +31,30 @@ type audioStats struct {
 	ClockCorrection float64  `json:"clockCorrectionPpm"`
 	MaxOutputGapMs  float64  `json:"maxOutputGapMs"`
 	OutputBlockMs   float64  `json:"outputBlockMs"`
+	Catchups        uint64   `json:"catchups"`
+	Compressed      uint64   `json:"compressedSamples"`
 }
 
 type playout struct {
-	mu                      sync.Mutex
-	buf                     [8192]int16
-	boundary                [8192]bool
-	head, size, target      int
-	started, seen           bool
-	seq                     uint32
-	volume                  float64
-	lastPacket, heartbeat   time.Time
-	resumeAt                time.Time
-	stats                   audioStats
-	tone                    int
-	lastSample, spliceFrom  float64
-	spliceLeft              int
-	hadAudio, splicePending bool
-	clock                   sampleClock
-	lastOutput              time.Time
+	mu                       sync.Mutex
+	buf                      [8192]int16
+	boundary                 [8192]bool
+	head, size, target       int
+	started, seen            bool
+	seq                      uint32
+	volume                   float64
+	lastPacket, heartbeat    time.Time
+	resumeAt                 time.Time
+	stats                    audioStats
+	tone                     int
+	lastSample, spliceFrom   float64
+	spliceLeft               int
+	hadAudio, splicePending  bool
+	clock                    sampleClock
+	lastOutput               time.Time
+	catchupBudget            int
+	nextCatchup, lastStarved time.Time
+	lastCatchup, catchupHold time.Time
 }
 
 func newPlayout() *playout {
@@ -68,6 +73,9 @@ func (p *playout) reset() {
 	p.hadAudio, p.splicePending = false, false
 	p.clock = newSampleClock()
 	p.lastOutput = time.Time{}
+	p.catchupBudget = 0
+	p.nextCatchup, p.lastStarved = time.Time{}, time.Time{}
+	p.lastCatchup, p.catchupHold = time.Time{}, time.Time{}
 }
 func (p *playout) beat() { p.mu.Lock(); p.heartbeat = time.Now(); p.mu.Unlock() }
 func (p *playout) setVolume(v float64) {
@@ -115,6 +123,7 @@ func (p *playout) clearQueue() {
 	p.started = false
 	p.resumeAt = time.Time{}
 	p.clock = newSampleClock()
+	p.catchupBudget = 0
 	if p.hadAudio {
 		p.beginSplice()
 	}
@@ -199,6 +208,7 @@ func (p *playout) render(out []byte, now time.Time) {
 		p.lastSample, p.spliceLeft = 0, 0
 		p.hadAudio, p.splicePending = false, false
 		p.clock = newSampleClock()
+		p.catchupBudget = 0
 		return
 	}
 	if p.tone > 0 {
@@ -225,6 +235,7 @@ func (p *playout) render(out []byte, now time.Time) {
 			}
 		}
 	}
+	p.catchUp(now)
 	for i := 0; i+1 < len(out); i += 2 {
 		if p.started && p.size == 0 {
 			p.started = false
@@ -233,6 +244,13 @@ func (p *playout) render(out []byte, now time.Time) {
 			p.stats.Underruns++
 			p.beginSplice()
 			p.clock.phase = 0
+			p.catchupBudget = 0
+			p.lastStarved = now
+			// If the network becomes unstable soon after shortening the queue,
+			// pause catch-up to avoid repeatedly trading fresh underruns for delay.
+			if !p.lastCatchup.IsZero() && now.Sub(p.lastCatchup) < 3*time.Second {
+				p.catchupHold = now.Add(5 * time.Second)
+			}
 		}
 		var sample float64
 		if p.started {
@@ -267,6 +285,13 @@ func (p *playout) render(out []byte, now time.Time) {
 		binary.LittleEndian.PutUint16(out[i:], uint16(v))
 	}
 	if p.hadAudio {
-		p.clock.observe(p.size, now)
+		if p.clock.observe(p.size, now) {
+			p.catchupBudget = 0
+			// The MINIMUM must be high for a whole second. A 100 ms burst whose
+			// queue drains normally is not evidence of disposable extra delay.
+			if p.clock.floorMs > 20 && now.Sub(p.lastStarved) >= time.Second {
+				p.catchupBudget = int(p.clock.floorMs*48) - catchupReserve
+			}
+		}
 	}
 }
