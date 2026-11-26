@@ -15,17 +15,22 @@ const staleAudioAfter = 250 * time.Millisecond
 
 // These counters describe this queue only, never acoustic end-to-end latency.
 type audioStats struct {
-	OutputCallbacks uint64  `json:"outputCallbacks"`
-	Received        uint64  `json:"received"`
-	Played          uint64  `json:"playedSamples"`
-	Dropped         uint64  `json:"dropped"`
-	Underruns       uint64  `json:"underruns"`
-	Resets          uint64  `json:"resets"`
-	Trims           uint64  `json:"trims"`
-	Trimmed         uint64  `json:"trimmedSamples"`
-	MaxGapMs        float64 `json:"maxArrivalGapMs"`
-	QueueMs         float64 `json:"queueMs"`
-	TargetMs        float64 `json:"targetMs"`
+	OutputCallbacks uint64   `json:"outputCallbacks"`
+	Received        uint64   `json:"received"`
+	Played          uint64   `json:"playedSamples"`
+	Dropped         uint64   `json:"dropped"`
+	Underruns       uint64   `json:"underruns"`
+	Resets          uint64   `json:"resets"`
+	Trims           uint64   `json:"trims"`
+	Trimmed         uint64   `json:"trimmedSamples"`
+	MaxGapMs        float64  `json:"maxArrivalGapMs"`
+	QueueMs         float64  `json:"queueMs"`
+	TargetMs        float64  `json:"targetMs"`
+	QueueFloorMs    *float64 `json:"queueFloorMs"`
+	QueuePeakMs     *float64 `json:"queuePeakMs"`
+	ClockCorrection float64  `json:"clockCorrectionPpm"`
+	MaxOutputGapMs  float64  `json:"maxOutputGapMs"`
+	OutputBlockMs   float64  `json:"outputBlockMs"`
 }
 
 type playout struct {
@@ -43,9 +48,13 @@ type playout struct {
 	lastSample, spliceFrom  float64
 	spliceLeft              int
 	hadAudio, splicePending bool
+	clock                   sampleClock
+	lastOutput              time.Time
 }
 
-func newPlayout() *playout { return &playout{target: frameSamples, volume: .5} }
+func newPlayout() *playout {
+	return &playout{target: frameSamples, volume: .5, clock: newSampleClock()}
+}
 func (p *playout) reset() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -57,6 +66,8 @@ func (p *playout) reset() {
 	p.resumeAt = time.Time{}
 	p.lastSample, p.spliceFrom, p.spliceLeft = 0, 0, 0
 	p.hadAudio, p.splicePending = false, false
+	p.clock = newSampleClock()
+	p.lastOutput = time.Time{}
 }
 func (p *playout) beat() { p.mu.Lock(); p.heartbeat = time.Now(); p.mu.Unlock() }
 func (p *playout) setVolume(v float64) {
@@ -74,6 +85,11 @@ func (p *playout) snapshot() audioStats {
 	s := p.stats
 	s.QueueMs = float64(p.size) / 48
 	s.TargetMs = float64(p.target) / 48
+	if p.clock.measured {
+		floor, peak := p.clock.floorMs, p.clock.peakMs
+		s.QueueFloorMs, s.QueuePeakMs = &floor, &peak
+	}
+	s.ClockCorrection = (p.clock.rate - 1) * 1e6
 	return s
 }
 
@@ -98,6 +114,7 @@ func (p *playout) clearQueue() {
 	p.head, p.size = 0, 0
 	p.started = false
 	p.resumeAt = time.Time{}
+	p.clock = newSampleClock()
 	if p.hadAudio {
 		p.beginSplice()
 	}
@@ -147,6 +164,7 @@ func (p *playout) push(b []byte, now time.Time) bool {
 		p.stats.Trims++
 		p.stats.Trimmed += uint64(excess)
 		p.splicePending = true
+		p.clock.phase = 0
 	}
 	if p.size == 0 && !p.started && p.hadAudio && p.resumeAt.IsZero() {
 		// A whole burst immediately exceeds the sample-count target. After an
@@ -167,6 +185,11 @@ func (p *playout) render(out []byte, now time.Time) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.stats.OutputCallbacks++
+	if !p.lastOutput.IsZero() {
+		p.stats.MaxOutputGapMs = math.Max(p.stats.MaxOutputGapMs, float64(now.Sub(p.lastOutput))/float64(time.Millisecond))
+	}
+	p.lastOutput = now
+	p.stats.OutputBlockMs = float64(len(out)/2) / 48
 	// A suspended tab or lost control connection cannot leave a microphone open.
 	if p.heartbeat.IsZero() || now.Sub(p.heartbeat) > time.Second {
 		p.size = 0
@@ -175,6 +198,7 @@ func (p *playout) render(out []byte, now time.Time) {
 		p.tone = 0
 		p.lastSample, p.spliceLeft = 0, 0
 		p.hadAudio, p.splicePending = false, false
+		p.clock = newSampleClock()
 		return
 	}
 	if p.tone > 0 {
@@ -208,20 +232,41 @@ func (p *playout) render(out []byte, now time.Time) {
 			p.target = min(p.target+frameSamples, 4*frameSamples)
 			p.stats.Underruns++
 			p.beginSplice()
+			p.clock.phase = 0
 		}
 		var sample float64
 		if p.started {
 			if p.splicePending || p.boundary[p.head] {
 				p.beginSplice()
 				p.splicePending = false
+				p.boundary[p.head] = false
 			}
 			sample = float64(p.buf[p.head])
-			p.head = (p.head + 1) % len(p.buf)
-			p.size--
+			next := (p.head + 1) % len(p.buf)
+			if p.size > 1 && !p.boundary[next] {
+				sample += (float64(p.buf[next]) - sample) * p.clock.phase
+			}
+			p.clock.phase += p.clock.rate
+			consume := int(p.clock.phase)
+			p.clock.phase -= float64(consume)
+			if consume >= p.size {
+				consume = p.size
+				p.clock.phase = 0
+			}
+			for j := 0; j < consume; j++ {
+				if j > 0 && p.boundary[p.head] {
+					p.splicePending = true
+				}
+				p.head = (p.head + 1) % len(p.buf)
+				p.size--
+			}
 			p.hadAudio = true
-			p.stats.Played++
+			p.stats.Played += uint64(consume)
 		}
 		v := p.smooth(sample)
 		binary.LittleEndian.PutUint16(out[i:], uint16(v))
+	}
+	if p.hadAudio {
+		p.clock.observe(p.size, now)
 	}
 }

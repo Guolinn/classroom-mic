@@ -35,7 +35,7 @@ import (
 	"github.com/quic-go/webtransport-go"
 )
 
-var version = "0.1.2"
+var version = "0.1.3"
 
 type receiver struct {
 	mu                        sync.Mutex

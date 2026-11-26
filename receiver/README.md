@@ -1,6 +1,6 @@
 # MicTurn local receiver — experimental
 
-Version 0.1.2 fixes excessive audio trimming when incoming packets arrive in larger batches. It also briefly reserves recovery time after starvation instead of repeatedly restarting too early. This can retain more queued audio during bursts; it is a continuity correction, not a latency reduction claim. Quit the older receiver before opening this version. Refresh both browser pages and create a new class from the newly opened receiver tab. The teacher's Audio details shows the connected receiver version.
+Version 0.1.3 adds smooth, bounded playback-rate correction for small differences between capture and playback clocks. It also reports recent queue minimum/maximum, rate adjustment and output callback gaps in Audio details. This addresses long-running queue drift in simulation; physical iPhone noise and the reported large arrival gaps remain under investigation. The 120 ms burst ceiling is unchanged, and this is not a zero-latency claim. Quit the older receiver before opening this version. Refresh both browser pages and create a new class from the newly opened receiver tab. The teacher's Audio details shows the connected receiver version.
 
 This Mac receiver lets students keep using the website while sending audio over local WebTransport datagrams instead of the browser WebRTC audio path. It is an alternative transport, not a zero-latency guarantee. Physical iPhone-to-classroom-speaker latency has not been measured for this release.
 

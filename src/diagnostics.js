@@ -1,6 +1,7 @@
 // These are individual stages, never a microphone-to-speaker latency estimate.
 const milliseconds = seconds => Number.isFinite(seconds) && seconds >= 0 ? Math.round(seconds * 1000) : null;
 const value = number => Number.isFinite(number) && number >= 0 ? number : null;
+const signedValue = number => Number.isFinite(number) ? number : null;
 
 export class AudioDiagnostics {
   async sample(engine) {
@@ -11,6 +12,7 @@ export class AudioDiagnostics {
     const track = engine.stream?.getAudioTracks()[0];
     const settings = track?.getSettings?.() || {};
     const sender = active && mode === 'local' && engine.role === 'student' ? engine.localSenderStats : null;
+    const localOutput = active && mode === 'local' && engine.role === 'host' ? engine.localReceiver?.stats : null;
     const report = {
       role: engine.role,
       transport: active ? mode === 'local' ? 'Local receiver' : mode === 'relay' ? 'Server relay' : 'Direct WebRTC' : 'Inactive',
@@ -26,6 +28,11 @@ export class AudioDiagnostics {
       localTrims: active && mode === 'local' && engine.role === 'host' ? value(engine.localReceiver?.stats?.trims) : null,
       localTrimmedMs: active && mode === 'local' && engine.role === 'host' ? milliseconds(value(engine.localReceiver?.stats?.trimmedSamples) === null ? undefined : engine.localReceiver.stats.trimmedSamples / 48000) : null,
       localMaxArrivalGapMs: active && mode === 'local' && engine.role === 'host' ? value(engine.localReceiver?.stats?.maxArrivalGapMs) : null,
+      localQueueFloorMs: value(localOutput?.queueFloorMs),
+      localQueuePeakMs: value(localOutput?.queuePeakMs),
+      localClockCorrectionPpm: signedValue(localOutput?.clockCorrectionPpm),
+      localMaxOutputGapMs: value(localOutput?.maxOutputGapMs),
+      localOutputBlockMs: value(localOutput?.outputBlockMs),
       localSent: active && mode === 'local' && engine.role === 'student' ? value(engine.localSent) : null,
       localSenderPath: sender?.path ?? null,
       localMaxCaptureGapMs: value(sender?.maxCaptureGapMs),
