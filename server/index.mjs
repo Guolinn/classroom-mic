@@ -5,6 +5,7 @@ import { resolve, extname, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer, WebSocket } from 'ws';
 import { validLocalAudio } from '../shared/local-receiver.js';
+import { serveDownload } from './downloads.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const token = () => randomBytes(32).toString('base64url');
@@ -112,6 +113,7 @@ export function createApp(options = {}) {
       if (req.method !== 'GET' && req.method !== 'HEAD') return json(res, 405, { error: 'Method not allowed.' });
       if (devHandler) return devHandler(req, res);
       const publicDir = resolve(root, 'dist');
+      if (path.startsWith('/downloads/')) return await serveDownload(req, res, resolve(publicDir, 'downloads'), path);
       let file = resolve(publicDir, '.' + decodeURIComponent(path));
       if (!file.startsWith(publicDir + '/')) file = resolve(publicDir, 'index.html');
       try { if (!(await stat(file)).isFile()) throw new Error(); } catch { file = resolve(publicDir, 'index.html'); }
