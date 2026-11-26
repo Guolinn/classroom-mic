@@ -9,8 +9,9 @@ import (
 
 const rate = 48000
 const frameSamples = 240      // Five milliseconds, mono PCM16.
-const maxQueuedSamples = 2400 // Burst allowance, not a target: at most 50 ms.
+const maxQueuedSamples = 5760 // Burst allowance, not a target: at most 120 ms.
 const spliceSamples = 48      // One millisecond of blending at discontinuities.
+const staleAudioAfter = 250 * time.Millisecond
 
 // These counters describe this queue only, never acoustic end-to-end latency.
 type audioStats struct {
@@ -29,13 +30,14 @@ type audioStats struct {
 
 type playout struct {
 	mu                      sync.Mutex
-	buf                     [4096]int16
-	boundary                [4096]bool
+	buf                     [8192]int16
+	boundary                [8192]bool
 	head, size, target      int
 	started, seen           bool
 	seq                     uint32
 	volume                  float64
 	lastPacket, heartbeat   time.Time
+	resumeAt                time.Time
 	stats                   audioStats
 	tone                    int
 	lastSample, spliceFrom  float64
@@ -52,6 +54,7 @@ func (p *playout) reset() {
 	p.stats = audioStats{}
 	p.tone = 0
 	p.lastPacket = time.Time{}
+	p.resumeAt = time.Time{}
 	p.lastSample, p.spliceFrom, p.spliceLeft = 0, 0, 0
 	p.hadAudio, p.splicePending = false, false
 }
@@ -94,6 +97,7 @@ func (p *playout) smooth(sample float64) int16 {
 func (p *playout) clearQueue() {
 	p.head, p.size = 0, 0
 	p.started = false
+	p.resumeAt = time.Time{}
 	if p.hadAudio {
 		p.beginSplice()
 	}
@@ -115,7 +119,7 @@ func (p *playout) push(b []byte, now time.Time) bool {
 	}
 	if !p.lastPacket.IsZero() {
 		p.stats.MaxGapMs = math.Max(p.stats.MaxGapMs, float64(now.Sub(p.lastPacket))/float64(time.Millisecond))
-		if now.Sub(p.lastPacket) > 100*time.Millisecond {
+		if now.Sub(p.lastPacket) > staleAudioAfter {
 			p.clearQueue()
 		}
 	}
@@ -136,11 +140,19 @@ func (p *playout) push(b []byte, now time.Time) bool {
 	if excess := p.size + frameSamples - maxQueuedSamples; excess > 0 {
 		// Keep useful audio and playback running. Emptying the entire queue here
 		// caused a repeated reset/refill cycle with batched browser callbacks.
+		// The cap must also accommodate the ~100 ms arrival gaps observed on
+		// physical phones. A 50 ms cap discarded valid speech from these bursts.
 		p.head = (p.head + excess) % len(p.buf)
 		p.size -= excess
 		p.stats.Trims++
 		p.stats.Trimmed += uint64(excess)
 		p.splicePending = true
+	}
+	if p.size == 0 && !p.started && p.hadAudio && p.resumeAt.IsZero() {
+		// A whole burst immediately exceeds the sample-count target. After an
+		// underrun, reserve one frame of real time as well, so restarting on
+		// the first burst does not repeat the same starvation on the next one.
+		p.resumeAt = now.Add(5 * time.Millisecond)
 	}
 	for i := 0; i < frameSamples; i++ {
 		p.appendSample(int16(binary.LittleEndian.Uint16(b[12+i*2:])), gapBoundary && i == 0)
@@ -159,6 +171,7 @@ func (p *playout) render(out []byte, now time.Time) {
 	if p.heartbeat.IsZero() || now.Sub(p.heartbeat) > time.Second {
 		p.size = 0
 		p.started = false
+		p.resumeAt = time.Time{}
 		p.tone = 0
 		p.lastSample, p.spliceLeft = 0, 0
 		p.hadAudio, p.splicePending = false, false
@@ -174,14 +187,15 @@ func (p *playout) render(out []byte, now time.Time) {
 		}
 		return
 	}
-	if now.Sub(p.lastPacket) > 100*time.Millisecond {
+	if now.Sub(p.lastPacket) > staleAudioAfter {
 		if p.size > 0 || p.started {
 			p.clearQueue()
 		}
 	}
 	if !p.started {
-		if p.size >= p.target {
+		if p.size >= p.target && !now.Before(p.resumeAt) {
 			p.started = true
+			p.resumeAt = time.Time{}
 			if p.hadAudio {
 				p.beginSplice()
 			}
@@ -190,6 +204,7 @@ func (p *playout) render(out []byte, now time.Time) {
 	for i := 0; i+1 < len(out); i += 2 {
 		if p.started && p.size == 0 {
 			p.started = false
+			p.resumeAt = time.Time{}
 			p.target = min(p.target+frameSamples, 4*frameSamples)
 			p.stats.Underruns++
 			p.beginSplice()

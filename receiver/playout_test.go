@@ -70,7 +70,7 @@ func TestDuplicateStaleAndBurst(t *testing.T) {
 		p.push(packet(i, 1000), now)
 	}
 	s := p.snapshot()
-	if s.QueueMs > 50 || s.Trims == 0 || s.Resets != 0 {
+	if s.QueueMs > 120 || s.Trims == 0 || s.Resets != 0 {
 		t.Fatalf("unbounded backlog: %+v", s)
 	}
 	if p.push([]byte("bad"), now) {
@@ -167,11 +167,11 @@ func TestOverflowTrimsOldAudioWithoutStoppingPlayback(t *testing.T) {
 	p.setVolume(1)
 	p.push(packet(0, 20000), now)
 	p.render(make([]byte, 256), now)
-	for seq := uint32(1); seq < 14; seq++ {
+	for seq := uint32(1); seq < 30; seq++ {
 		p.push(packet(seq, -20000), now)
 	}
 	before := p.snapshot()
-	if before.Trims == 0 || before.Resets != 0 || before.QueueMs > 50 || !p.started {
+	if before.Trims == 0 || before.Resets != 0 || before.QueueMs > 120 || !p.started {
 		t.Fatalf("overflow stopped playback: %+v", before)
 	}
 	out := make([]byte, 256)
