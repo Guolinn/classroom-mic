@@ -18,6 +18,8 @@ Made by Guolin in UBC. This is an independent personal project, not an official 
 
 The phone sends audio through the network; it does not need to pair with the computer over Bluetooth. Keep the phone page open and the screen unlocked during a speaking turn.
 
+An optional [local receiver for Mac](https://classroom-mic.beringtech.com/receiver) is available as an **experimental** mode. Students still use the website; the teacher runs a small native receiver. Audio travels over local encrypted WebTransport datagrams in 5 ms packets. The standard browser mode remains available. This is not a 5 ms total-latency claim: physical iPhone and classroom measurements are still needed. See [receiver setup and source](receiver/README.md).
+
 ## Status
 
 The website is deployed. The owner has tried iPhone Safari and Mac Chrome with wired classroom speakers and reported noticeable delay. Controlled measurements of the complete classroom audio path are still needed. See [verification](docs/verification.md) for the scope of automated and browser checks.
@@ -62,7 +64,7 @@ npm run test:browser
 
 See [verification](docs/verification.md) for prerequisites and what the checks cover.
 
-To investigate delay, open **Audio details** during a speaking turn on both devices. It shows the transport in use and supported measurements for individual audio stages. **Copy details** copies those measurements locally; it does not record or upload audio. Missing browser metrics are shown as unavailable. The displayed values are not total microphone-to-speaker latency. See [latency investigation](docs/latency-investigation.md) for measurements, the relay-buffer change, and remaining physical checks. Both devices must reload to use the October 4 update.
+To investigate delay, open **Audio details** during a speaking turn on both devices. It shows the transport in use and supported measurements for individual audio stages. **Copy details** copies those measurements locally; it does not record or upload audio. Missing browser metrics are shown as unavailable. The displayed values are not total microphone-to-speaker latency. See [latency investigation](docs/latency-investigation.md) for measurements, the relay-buffer change, and remaining physical checks. Both devices must reload after an update.
 
 ## How it works
 
@@ -79,6 +81,8 @@ Read the [architecture](docs/architecture.md), [Terms of Service](https://classr
 | `src/` | Teacher and student interface, browser audio, and English policy pages. |
 | `public/` | AudioWorklet processors. |
 | `server/` | HTTP API, room permissions, signaling, and audio relay. |
+| `receiver/` | Experimental native Mac output, authenticated local WebTransport, build script, and tests. |
+| `shared/` | Receiver endpoint and ticket validation shared by browser and server. |
 | `test/` | Server, audio, and browser checks. |
 | `deploy/` | Current-host service definition, activation script, and smoke check. |
 | `docs/` | Deployment, architecture, and verification notes. |

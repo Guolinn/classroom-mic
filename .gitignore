@@ -19,3 +19,5 @@ coverage/
 # Owner-specific operational records stay local. Portable docs live in docs/.
 /DEPLOYMENT.md
 /VERIFICATION.json
+/receiver/build/
+/public/downloads/

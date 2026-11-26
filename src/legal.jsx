@@ -1,7 +1,7 @@
 import React, { useEffect } from 'react';
 
 const email = 'guolinn@student.ubc.ca';
-const updated = 'October 2, 2026';
+const updated = 'November 25, 2026';
 
 export function PolicyLink({ type, children }) {
   return <a href={`/${type}`} target="_blank" rel="noopener" title="Opens in a new tab">{children}</a>;
@@ -60,6 +60,7 @@ function Privacy() {
       <p>The teacher receives participants' display names, speaking requests, connection status, and the approved speaker's live audio. The class name and active speaker's display name are also sent to class participants. Anyone who knows a class code may join; keep the code within the intended group.</p>
       <p>Your voice can be heard by people near the classroom speakers or the teacher's device. The website cannot control recordings made by teachers, participants, or other software outside this service.</p>
       <p>Audio normally travels directly between the approved speaker and teacher using an encrypted browser connection. Establishing that connection may reveal network addresses to the other device. If a direct connection fails, audio passes through our server over encrypted connections and is briefly buffered in memory for delivery. That fallback is not end-to-end encrypted against the server operator.</p>
+      <p>If the teacher selects the optional local receiver, the approved speaker's browser sends encrypted audio directly to the receiver on the teacher's Mac over the local network. The website server carries participation requests and the receiver's local address, certificate fingerprint, and temporary speaking permission, but does not relay audio in this mode. The teacher's receiver-control key stays in their browser tab and receiver. Other students do not receive the approved speaker's connection permission. A failed local connection stops that speaking turn; the teacher can select browser audio and approve a new request.</p>
     </section>
     <section><h2>Hosting and connection providers</h2>
       <p>The application is hosted on Amazon Web Services (AWS) in Oregon, United States. Class information and any server-relayed audio are processed there. Data processed outside Canada may be subject to the laws of the country where it is processed. See <a href="https://aws.amazon.com/compliance/data-privacy-faq/" target="_blank" rel="noopener noreferrer">AWS data privacy information</a>.</p>
@@ -71,6 +72,7 @@ function Privacy() {
         <li><strong>Class data:</strong> kept in server memory, not a database. It is removed when the teacher ends the class, the class expires after about 12 hours, the teacher stays offline for about five minutes, or the application restarts. A student's server entry is removed when they leave or after about ten minutes offline.</li>
         <li><strong>Abuse prevention:</strong> temporary IP-based request counters are kept in memory and normally cleared after about one minute.</li>
         <li><strong>Browser storage:</strong> class codes and session access credentials are stored in the current tab so refreshing can restore access. They are removed when the app receives a class-end message or the tab's session storage is cleared. Browser session-restore features may retain them; you can remove them by clearing this site's data.</li>
+        <li><strong>Local receiver pairing:</strong> if selected, the receiver address, certificate fingerprint, and control key are kept in the teacher's tab session storage. Use Forget receiver on the receiver setup page or clear this site's data to remove them. The receiver generates a new key and short-lived certificate each time it starts, holds audio only in memory, and creates no audio recordings.</li>
         <li><strong>Operational logs:</strong> server and proxy errors can include IP addresses, timestamps, and requested paths. Routine page-view access logging is not enabled. Logs follow the host's rotation and storage settings, rather than a guaranteed fixed deletion period. The application does not intentionally write microphone audio or participant names to logs.</li>
       </ul>
       <p>Hosting and connection providers may retain their own operational data under their applicable policies. Information copied or recorded by class participants is outside the website's retention controls.</p>

@@ -1,5 +1,7 @@
 # Verification
 
+The November 25 local receiver has separate [verification notes](local-receiver-verification.md), including synthetic browser/native checks and their limits. Physical iPhone-to-classroom latency remains unmeasured for that mode.
+
 Repository: [Guolinn/classroom-mic](https://github.com/Guolinn/classroom-mic).
 
 ## Recorded checks

@@ -34,9 +34,17 @@ Only the approved student's microphone sends audio. Other students do not receiv
 - The server checks the active speaker and permission generation for each audio frame. Mute, speaker changes, and disconnection clear pending playback.
 - Classroom state is process-local. Use one process, not multiple replicas behind a load balancer. Horizontal scaling requires shared room state and cross-process routing.
 - Classes expire after 12 hours, or after the teacher has been offline for five minutes. Offline students are removed after ten minutes. Reloading the original teacher tab restores its session; closing the tab may discard its browser-scoped credential.
-- Permission tokens stay out of URLs and QR codes. Audio is not written to files or a database.
+- Classroom session tokens stay out of URLs and student QR codes. Local receiver pairing uses a teacher-only URL fragment that is immediately removed, and temporary keys in encrypted local WebTransport handshakes. Audio is not written to files or a database.
 - `ICE_SERVERS_JSON` can provide private TURN endpoints if needed. This value is delivered to class participants; use browser-safe, short-lived credentials and never a provider management API key.
 
+
+## Optional local receiver
+
+The November 25 experimental mode replaces only the media path: the server still owns classroom permissions. A paired native Mac program accepts encrypted WebTransport control and audio sessions. The teacher's 256-bit control key stays in the receiver and their tab. Per-turn tickets, the LAN endpoint and certificate pin pass through the classroom server only to the teacher and active student. Other students do not receive the ticket. Old browser clients must reload before participating in this mode.
+
+The native receiver accepts one controller and one approved sender. Muting or switching replaces the ticket, closes the old session and clears its queue. The server rejects attempts to change a local speaking turn to relay mode; failure ends the turn instead. Browser mode is an explicit teacher selection and requires a new request. If control heartbeats stop, the native render callback produces silence within one second. Keeping the host page visible is necessary; throttled background timers may trigger this behavior.
+
+The sender uses the existing microphone protection graph and a separate 5 ms PCM worklet. WebTransport datagrams avoid retransmitting late audio; application backpressure and packet age checks discard stale sender work. The receiver uses a small bounded queue, ignores old sequence numbers, inserts silence for short losses, and resets on long gaps. Capture and native output latency remain device-dependent and are not derived from queue sizes. See [receiver documentation](../receiver/README.md) for packet format, buffering, TLS pinning, limitations and build instructions.
 
 ## Boundaries
 

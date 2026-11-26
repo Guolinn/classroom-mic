@@ -4,6 +4,14 @@ body { margin: 0; }
 .app-shell { display: flex; flex-direction: column; min-height: 100svh; }
 .app-content { flex: 1; min-width: 0; }
 button, input { font: inherit; touch-action: manipulation; }
+select { font: inherit; min-height: 44px; padding: 8px 10px; border: 1px solid #c8cbd2; border-radius: 3px; background: #fff; color: inherit; max-width: 100%; }
+.home select { width: 100%; margin-bottom: 24px; }
+.receiver-output { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 0 0 16px; }
+.receiver-link { margin-top: 12px; color: var(--muted); }
+.receiver-page > p, .receiver-page > ol { margin: 20px 0; }
+.receiver-pair { border-top: 1px solid var(--line); padding: 18px 0; }
+.receiver-pair summary { cursor: pointer; }
+.receiver-pair form { margin-top: 20px; }
 button { cursor: pointer; border: 0; background: none; color: inherit; }
 button:disabled { cursor: not-allowed; opacity: .45; }
 button:focus-visible, input:focus-visible, summary:focus-visible, a:focus-visible { outline: 3px solid #6485ff; outline-offset: 4px; }

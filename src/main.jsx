@@ -5,7 +5,11 @@ import QRCode from 'qrcode';
 import { ClassroomAudio } from './audio';
 import { AudioDetails } from './audio-details';
 import { Footer, LegalPage, PolicyLink } from './legal';
+import { importReceiverLink, readReceiver } from './local-receiver';
+import { ReceiverPage } from './receiver-page';
 import './styles.css';
+
+importReceiverLink();
 
 const readSession = (role, code) => { try { return JSON.parse(sessionStorage.getItem(`mic:${role}:${code}`)); } catch { return null; } };
 function remember(session) { sessionStorage.setItem(`mic:${session.role}:${session.code}`, JSON.stringify(session)); }
@@ -29,12 +33,14 @@ function Home({ go, joinCode = '' }) {
   const [title, setTitle] = useState(''), [code, setCode] = useState(joinCode), [name, setName] = useState('');
   const [password, setPassword] = useState(''), [requiresPassword, setRequiresPassword] = useState(false);
   const [busy, setBusy] = useState(false), [error, setError] = useState('');
+  const [localOutput, setLocalOutput] = useState(!!readReceiver());
   useEffect(() => { fetch('/api/config').then(r => r.json()).then(c => setRequiresPassword(c.hostPasswordRequired)).catch(() => setError('Cannot reach the server. Refresh to retry.')); }, []);
   async function submit(e) {
     e.preventDefault(); setBusy(true); setError('');
     try {
       if (role === 'student' && !/^\d{6}$/.test(code)) throw new Error('Enter a six-digit class code.');
       const session = await api(role === 'host' ? '/api/rooms' : `/api/rooms/${code}/join`, role === 'host' ? { title, password } : { name });
+      if (role === 'host') session.localReceiverEnabled = localOutput;
       remember(session); go(`/${role === 'host' ? 'host' : 'join'}/${session.code}`);
       window.dispatchEvent(new Event('session-change'));
     } catch (e) { setError(e.message); } finally { setBusy(false); }
@@ -55,6 +61,7 @@ function Home({ go, joinCode = '' }) {
         <label htmlFor="title">Class name <span>(optional)</span></label>
         <input id="title" maxLength={60} value={title} onChange={e => setTitle(e.target.value)} />
         {requiresPassword && <><label htmlFor="password">Teacher password</label><input id="password" required type="password" autoComplete="current-password" value={password} onChange={e => setPassword(e.target.value)} /></>}
+        {readReceiver() && <><label htmlFor="output-mode">Audio output</label><select id="output-mode" value={localOutput ? 'local' : 'browser'} onChange={e => setLocalOutput(e.target.value === 'local')}><option value="browser">Browser audio</option><option value="local">Local receiver (experimental)</option></select></>}
       </> : <>
         <label htmlFor="code">Class code</label><input id="code" value={code} inputMode="numeric" pattern="[0-9]{6}" required maxLength={6} onChange={e => setCode(e.target.value.replace(/\D/g, ''))} />
         <label htmlFor="name">Your name</label><input id="name" autoComplete="given-name" value={name} maxLength={24} required onChange={e => setName(e.target.value)} />
@@ -63,6 +70,7 @@ function Home({ go, joinCode = '' }) {
       <p className="entry-notice">By continuing, you agree to the <PolicyLink type="terms">Terms of Service</PolicyLink>. Read our <PolicyLink type="privacy">Privacy Policy</PolicyLink>.</p>
       <Notice error>{error}</Notice>
     </form>
+    {role === 'host' && <a className="text-button receiver-link" href="/receiver" onClick={e => { e.preventDefault(); go('/receiver'); }}>Try the local receiver</a>}
   </main>;
 }
 function useClassroom(session) {
@@ -74,6 +82,7 @@ function useClassroom(session) {
   useEffect(() => {
     let disposed = false, timer, attempts = 0, terminal = false;
     const sound = new ClassroomAudio(session.role, data => send(data), data => { const ws = socket.current; if (ws?.readyState === 1 && ws.bufferedAmount < 65536) ws.send(data); }, data => { if (!disposed) setAudio(a=>({...a,...data})); });
+    if (session.role === 'host' && session.localReceiverEnabled) sound.configureLocal(readReceiver());
     engine.current = sound;
     function connect() {
       if (disposed || terminal) return;
@@ -87,7 +96,10 @@ function useClassroom(session) {
         if (msg.type === 'ready') { attempts = 0; sound.iceServers = msg.iceServers; setConnection('connected'); setError(''); }
         if (msg.type === 'state') { sound.sync(msg, session.id); setState(msg); }
         if (msg.type === 'rtc') sound.receiveRtc(msg);
-        if (msg.type === 'error' || msg.type === 'notice') { setError(msg.message); if (session.role === 'student' && !sound.grant) sound.releaseMic(); }
+        if (msg.type === 'error' || msg.type === 'notice') {
+          setError(msg.message); if (session.role === 'student' && !sound.grant) sound.releaseMic();
+          if (msg.type === 'error' && session.role === 'host' && sound.pendingLocalApproval) { sound.stopAll(); send({ type: 'mute' }); }
+        }
         if (msg.type === 'ended') { terminal = true; sound.stopAll(); setEnded(msg.reason); sessionStorage.removeItem(`mic:${session.role}:${session.code}`); }
       };
       ws.onclose = e => {
@@ -105,7 +117,7 @@ function useClassroom(session) {
     document.addEventListener('visibilitychange', visibility);
     return () => { disposed = true; clearTimeout(timer); document.removeEventListener('visibilitychange', visibility); socket.current?.close(); sound.destroy(); };
   }, [session.code, session.token]);
-  return { state, connection, error, ended, audio, send, engine, setError };
+  return { state, connection, error, ended, audio, send, engine, setError, session };
 }
 function Meter({ level }) {
   return <div className="meter" aria-label="Audio level"><span style={{ width: `${Math.max(0, Math.min(100, level * 100))}%` }} /></div>;
@@ -131,13 +143,31 @@ function QR({ code, large = false }) {
 function Host({ room, go }) {
   const { state, connection, error, ended, audio, send, engine, setError } = room;
   const [projection, setProjection] = useState(false), [volume, setVolume] = useState(.5), [confirmEnd, setConfirmEnd] = useState(false);
+  const [localOutput, setLocalOutput] = useState(!!room.session.localReceiverEnabled && !!readReceiver()), [approving, setApproving] = useState(false);
+  const approvalVersion = useRef(0);
+  useEffect(() => () => { approvalVersion.current++; }, []);
   const dialog = useRef(null);
   useEffect(() => { if (confirmEnd) dialog.current?.showModal(); else dialog.current?.close(); }, [confirmEnd]);
   useEffect(() => { const onKey = e => { if (e.key === 'Escape') setProjection(false); }; window.addEventListener('keydown', onKey); return () => window.removeEventListener('keydown', onKey); }, []);
   const connected = connection === 'connected';
   async function testAudio() { try { await engine.current.unlock(true); setError(''); } catch (e) { setError(e.message); } }
-  async function approve(id) { try { await engine.current.unlock(); if (send({ type: 'approve', id })) setError(''); } catch (e) { setError(e.message); } }
-  const mute = () => { engine.current.stopAll(); send({ type: 'mute' }); };
+  async function approve(id) {
+    if (approving) return; setApproving(true); const version = ++approvalVersion.current;
+    try {
+      await engine.current.unlock();
+      if (version !== approvalVersion.current) return;
+      const local = engine.current.localEnabled ? await engine.current.armLocal() : undefined;
+      if (version !== approvalVersion.current) { engine.current.stopAll(); return; }
+      if (send({ type: 'approve', id, local })) setError(''); else engine.current.stopAll();
+    } catch (e) { setError(e.message); } finally { setApproving(false); }
+  }
+  function changeOutput(value) {
+    approvalVersion.current++;
+    engine.current.stopAll(); send({ type: 'mute' });
+    const local = value === 'local'; engine.current.configureLocal(local ? readReceiver() : null); setLocalOutput(local);
+    room.session.localReceiverEnabled = local; remember(room.session); setError('');
+  }
+  const mute = () => { approvalVersion.current++; engine.current.stopAll(); send({ type: 'mute' }); };
   if (ended) return <End reason={ended} go={go} />;
   if (!state) return <Loading go={go} />;
   const queue = state.queue.map(id => state.students.find(s => s.id === id)).filter(Boolean);
@@ -149,6 +179,8 @@ function Host({ room, go }) {
       <div className="page-heading"><h1>{state.title}</h1><button className="text-button danger" onClick={() => setConfirmEnd(true)}>End class</button></div>
       <Connection value={connection} />
       <div className="host-layout"><section className="controls">
+        {readReceiver() && <label className="receiver-output">Audio output<select aria-label="Audio output" value={localOutput ? 'local' : 'browser'} disabled={approving} onChange={e => changeOutput(e.target.value)}><option value="browser">Browser audio</option><option value="local">Local receiver (experimental)</option></select></label>}
+        <Notice error>{audio.receiverError}</Notice>
         <div className="sound-settings">
           <button className="text-button" onClick={testAudio}><Volume2 size={19} />Test speaker</button>
           <label className="volume"><span>Volume</span><input aria-label="Speaker volume" type="range" min="0" max="1" step=".01" value={volume} onChange={e => { const v = Number(e.target.value); setVolume(v); engine.current.setVolume(v); }} /><span>{Math.round(volume * 100)}%</span></label>
@@ -160,12 +192,12 @@ function Host({ room, go }) {
           <AudioDetails engine={engine} />
         </div>
         <div className="section-heading"><h2>Requests <span>{queue.length}</span></h2>
-          <button className="text-button" disabled={!connected} onClick={() => { if (!state.paused) engine.current.stopAll(); send({ type: 'pause', paused: !state.paused }); }}>{state.paused ? <Play size={16} /> : <Pause size={16} />}{state.paused ? 'Resume requests' : 'Pause requests'}</button>
+          <button className="text-button" disabled={!connected} onClick={() => { approvalVersion.current++; if (!state.paused) engine.current.stopAll(); send({ type: 'pause', paused: !state.paused }); }}>{state.paused ? <Play size={16} /> : <Pause size={16} />}{state.paused ? 'Resume requests' : 'Pause requests'}</button>
         </div>
         {queue.length ? <ol className="queue">{queue.map((s, i) => <li key={s.id}>
           <span className="queue-number">{i + 1}</span><span className="student-name">{s.name}</span>
           <button className="text-button" onClick={() => send({ type: 'reject', id: s.id })} aria-label={`Dismiss ${s.name}`} disabled={!connected}>Dismiss</button>
-          <button className="small-primary" onClick={() => approve(s.id)} disabled={!connected || state.paused}>{state.activeId ? 'Switch speaker' : 'Allow'}</button>
+          <button className="small-primary" onClick={() => approve(s.id)} disabled={!connected || state.paused || approving}>{approving ? 'Connecting…' : state.activeId ? 'Switch speaker' : 'Allow'}</button>
         </li>)}</ol> : <p className="empty">No requests</p>}
         <Notice error>{error}</Notice>
         <details className="participants"><summary>Participants ({state.students.length})</summary><ul>{state.students.map(s => <li key={s.id}><span>{s.name}</span><span className="muted">{!s.online ? 'Offline' : state.activeId === s.id ? 'Speaking' : s.requestedAt ? 'Waiting' : ''}</span></li>)}</ul></details>
@@ -174,7 +206,7 @@ function Host({ room, go }) {
         <QR code={state.code} /><button className="outline full" onClick={() => setProjection(true)}><Maximize2 size={17} />Present QR code</button>
       </aside></div>
     </main>}
-    <dialog ref={dialog} onCancel={() => setConfirmEnd(false)}><h2>End this class?</h2><p>This disconnects everyone and expires the class code.</p><div className="dialog-actions"><button className="outline" onClick={() => setConfirmEnd(false)}>Cancel</button><button className="danger-button" disabled={!connected} onClick={() => { engine.current.stopAll(); send({ type: 'end' }); setConfirmEnd(false); }}>End class</button></div></dialog>
+    <dialog ref={dialog} onCancel={() => setConfirmEnd(false)}><h2>End this class?</h2><p>This disconnects everyone and expires the class code.</p><div className="dialog-actions"><button className="outline" onClick={() => setConfirmEnd(false)}>Cancel</button><button className="danger-button" disabled={!connected} onClick={() => { approvalVersion.current++; engine.current.stopAll(); send({ type: 'end' }); setConfirmEnd(false); }}>End class</button></div></dialog>
   </>;
 }
 function Student({ room, session, go }) {
@@ -220,6 +252,7 @@ function App() {
   useEffect(()=>{const refresh=()=>setRevision(v=>v+1);window.addEventListener('session-change',refresh);return()=>window.removeEventListener('session-change',refresh)},[]);
   const match=path.match(/^\/(host|join)\/(\d{6})$/);
   if(path==='/terms'||path==='/privacy')return <LegalPage type={path.slice(1)}/>;
+  if(path==='/receiver')return <ReceiverPage go={go}/>;
   if(match){ const role=match[1]==='host'?'host':'student'; const session=readSession(role,match[2]); if(session)return <Classroom key={`${role}:${match[2]}:${revision}`} session={session} go={go}/>; if(role==='student')return <Home key={path} go={go} joinCode={match[2]}/>; return <End reason="Open this class in the browser where you created it." go={go}/>; }
   return <Home key={path} go={go}/>;
 }

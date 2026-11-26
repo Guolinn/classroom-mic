@@ -37,6 +37,13 @@ try {
   const audio = Buffer.alloc(1928); audio.writeUInt32LE(state.grant); audio.writeUInt32LE(24000, 4); audio.writeInt16LE(1234, 8);
   student.socket.send(audio); assert.equal((await host.wait(m => m.type === 'binary')).raw.readInt16LE(8), 1234);
   host.send({ type: 'mute' }); await student.wait(m => m.type === 'state' && !m.activeId && m.grant === 0);
+  student.send({ type: 'request' }); await host.wait(m => m.type === 'state' && m.queue.length === 1);
+  host.send({ type: 'approve', id: studentSession.id, local: {url:'https://192.168.1.10:4444',hash:'a'.repeat(43),ticket:'b'.repeat(43)} });
+  const local = await student.wait(m => m.type === 'state' && m.mode === 'local');
+  assert.equal(local.local.ticket,'b'.repeat(43));
+  student.send({ type: 'local-failed', grant: local.grant });
+  await host.wait(m => m.type === 'notice');
+  await student.wait(m => m.type === 'state' && !m.activeId && !m.local);
   host.send({ type: 'end' }); await student.wait(m => m.type === 'ended');
-  console.log(JSON.stringify({ pass: true, checks: ['HTTPS certificate', 'health endpoint', 'class creation', 'student join', 'WebSocket upgrade', 'approval', 'audio relay', 'mute', 'end class'] }));
+  console.log(JSON.stringify({ pass: true, checks: ['HTTPS certificate', 'health endpoint', 'class creation', 'student join', 'WebSocket upgrade', 'approval', 'audio relay', 'mute', 'local receiver permission exchange', 'local failure revocation', 'end class'] }));
 } finally { host.send({ type: 'end' }); host.socket.close(); student.socket.close(); }

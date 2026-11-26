@@ -12,7 +12,16 @@ export class AudioDiagnostics {
     const settings = track?.getSettings?.() || {};
     const report = {
       role: engine.role,
-      transport: active ? mode === 'relay' ? 'Server relay' : 'Direct WebRTC' : 'Inactive',
+      transport: active ? mode === 'local' ? 'Local receiver' : mode === 'relay' ? 'Server relay' : 'Direct WebRTC' : 'Inactive',
+      localQueueMs: active && mode === 'local' && engine.role === 'host' ? value(engine.localReceiver?.stats?.queueMs) : null,
+      localTargetMs: active && mode === 'local' && engine.role === 'host' ? value(engine.localReceiver?.stats?.targetMs) : null,
+      localUnderruns: active && mode === 'local' && engine.role === 'host' ? value(engine.localReceiver?.stats?.underruns) : null,
+      localDropped: active && mode === 'local' ? value(engine.role === 'host' ? engine.localReceiver?.stats?.dropped : engine.localDropped) : null,
+      localReceived: active && mode === 'local' && engine.role === 'host' ? value(engine.localReceiver?.stats?.received) : null,
+      localPlayedSamples: active && mode === 'local' && engine.role === 'host' ? value(engine.localReceiver?.stats?.playedSamples) : null,
+      localOutputCallbacks: active && mode === 'local' && engine.role === 'host' ? value(engine.localReceiver?.stats?.outputCallbacks) : null,
+      localResets: active && mode === 'local' && engine.role === 'host' ? value(engine.localReceiver?.stats?.resets) : null,
+      localSent: active && mode === 'local' && engine.role === 'student' ? value(engine.localSent) : null,
       connection: active && mode === 'direct' ? peer?.connectionState || 'connecting' : null,
       peerRoundTripMs: null,
       receiverJitterMs: null,
@@ -62,4 +71,4 @@ export class AudioDiagnostics {
   }
 }
 
-export function formatDiagnosticMs(number) { return number === null || number === undefined ? 'Unavailable' : `${number} ms`; }
+export function formatDiagnosticMs(number) { return number === null || number === undefined ? 'Unavailable' : `${Math.round(number * 10) / 10} ms`; }

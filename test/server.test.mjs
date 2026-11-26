@@ -32,6 +32,22 @@ async function setup(t, env = {}) {
 const stateWhere = fn => m => m.type === 'state' && fn(m);
 const delay=ms=>new Promise(r=>setTimeout(r,ms));
 
+test('local audio tickets go only to the approved student and cannot bypass host control',async t=>{
+  const f=await setup(t),hs=await f.create(),as=await f.join(hs.code,'Alex'),bs=await f.join(hs.code,'Jordan');
+  const h=await f.ready(hs),a=await f.ready(as),b=await f.ready(bs);
+  a.send({type:'request'});await h.wait(stateWhere(s=>s.queue.length===1));
+  const local={url:'https://192.168.1.10:4444',hash:'a'.repeat(43),ticket:'b'.repeat(43),key:'must-not-forward'};
+  h.send({type:'approve',id:as.id,local:{...local,url:'https://example.com'}});assert.match((await h.wait(m=>m.type==='error')).message,/Invalid local/);
+  h.send({type:'approve',id:as.id,local});
+  const granted=await a.wait(stateWhere(s=>s.mode==='local'));
+  assert.equal(granted.local.ticket,local.ticket);assert.equal(granted.local.key,undefined);
+  const bystander=await b.wait(stateWhere(s=>s.mode==='local'));assert.equal(bystander.local,undefined);
+  a.send({type:'relay',grant:granted.grant});b.send({type:'local-failed',grant:granted.grant});await delay(30);assert.equal(f.app.rooms.get(hs.code).mode,'local');
+  h.clear();a.send({type:'local-failed',grant:granted.grant});await h.wait(m=>m.type==='notice');await h.wait(stateWhere(s=>!s.activeId));assert.equal(f.app.rooms.get(hs.code).local,null);
+  a.send({type:'request'});await h.wait(stateWhere(s=>s.queue.length===1));h.send({type:'approve',id:as.id});
+  const fallback=await a.wait(stateWhere(s=>s.activeId===as.id && s.mode==='direct'));assert.equal(fallback.local,undefined);
+});
+
 test('HTTP validates origins, password, room and student name; no privileges in student response',async t=>{
   const f=await setup(t,{HOST_PASSWORD:'secret'});
   assert.equal((await f.post('/api/rooms',{}, {Origin:'https://evil.test'})).status,403);

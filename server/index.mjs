@@ -4,6 +4,7 @@ import { readFile, stat } from 'node:fs/promises';
 import { resolve, extname, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer, WebSocket } from 'ws';
+import { validLocalAudio } from '../shared/local-receiver.js';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const token = () => randomBytes(32).toString('base64url');
@@ -42,6 +43,7 @@ export function createApp(options = {}) {
       type: 'state', code: room.code, title: room.title, paused: room.paused,
       hostOnline: room.host?.readyState === 1, activeId: room.activeId, grant: room.grant, mode: room.mode,
       activeName: room.students.get(room.activeId)?.name || '', expiresAt: room.createdAt + ttl,
+      ...(room.mode === 'local' && (!student || student.id === room.activeId) ? { local: room.local } : {}),
       online: list.filter(s => s.ws?.readyState === 1).length,
       ...(student ? { me: { id: student.id, name: student.name, requested: !!student.requestedAt, position: queue.findIndex(s => s.id === student.id) + 1 } } : {
         students: list.map(s => ({ id: s.id, name: s.name, online: s.ws?.readyState === 1, requestedAt: s.requestedAt, joinedAt: s.joinedAt })),
@@ -53,7 +55,7 @@ export function createApp(options = {}) {
     send(room.host, snapshot(room));
     for (const s of room.students.values()) send(s.ws, snapshot(room, s));
   }
-  function silence(room) { room.activeId = null; room.grant = 0; room.mode = 'direct'; }
+  function silence(room) { room.activeId = null; room.grant = 0; room.mode = 'direct'; room.local = null; }
   function end(room, reason = 'Class ended') {
     send(room.host, { type: 'ended', reason });
     room.host?.close(1000);
@@ -113,7 +115,7 @@ export function createApp(options = {}) {
       let file = resolve(publicDir, '.' + decodeURIComponent(path));
       if (!file.startsWith(publicDir + '/')) file = resolve(publicDir, 'index.html');
       try { if (!(await stat(file)).isFile()) throw new Error(); } catch { file = resolve(publicDir, 'index.html'); }
-      const types = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.png': 'image/png' };
+      const types = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.png': 'image/png', '.zip': 'application/zip', '.txt': 'text/plain; charset=utf-8' };
       res.setHeader('Content-Type', types[extname(file)] || 'application/octet-stream');
       res.setHeader('Cache-Control', path.startsWith('/assets/') ? 'public, max-age=31536000, immutable' : 'no-cache');
       if (req.method === 'HEAD') return res.end();
@@ -180,14 +182,23 @@ export function createApp(options = {}) {
       }
       if (msg.type === 'relay') {
         if (msg.grant !== room.grant || !room.activeId || (role !== 'host' && room.activeId !== student.id)) return;
+        if (room.mode === 'local') return;
         room.mode = 'relay'; broadcast(room); return;
+      }
+      if (msg.type === 'local-failed') {
+        if (room.mode !== 'local' || msg.grant !== room.grant || (role !== 'host' && room.activeId !== student.id)) return;
+        silence(room);
+        send(room.host, { type: 'notice', message: 'Local audio could not connect. Check the receiver and Wi-Fi, or select Browser audio and ask the student to request again.' });
+        broadcast(room); return;
       }
       if (role === 'host') {
         if (msg.type === 'approve') {
           const next = room.students.get(msg.id);
           if (room.paused) return error('Resume requests first.');
           if (!next?.requestedAt || next.ws?.readyState !== 1) return error('This student cancelled or disconnected.');
-          room.activeId = next.id; room.grant = randomInt(1, 0xffffffff); room.mode = 'direct'; next.requestedAt = 0;
+          if (msg.local != null && !validLocalAudio(msg.local)) return error('Invalid local receiver. Pair it again.');
+          room.activeId = next.id; room.grant = randomInt(1, 0xffffffff); room.mode = msg.local ? 'local' : 'direct'; next.requestedAt = 0;
+          room.local = msg.local ? { url: msg.local.url, hash: msg.local.hash, ticket: msg.local.ticket } : null;
         } else if (msg.type === 'mute') silence(room);
         else if (msg.type === 'pause') { room.paused = !!msg.paused; if (room.paused) silence(room); }
         else if (msg.type === 'reject') { const s = room.students.get(msg.id); if (s) { s.requestedAt = 0; send(s.ws, { type: 'notice', message: 'Request dismissed. You can request again later.' }); } }

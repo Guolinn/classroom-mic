@@ -31,6 +31,7 @@ export function AudioDetails({ engine }) {
     {open && report && <>
       <dl>
         <dt>Connection</dt><dd>{report.transport}{report.connection ? ` · ${report.connection}` : ''}</dd>
+        {report.transport === 'Local receiver' && <><dt>Packet duration</dt><dd>5 ms</dd>{report.role === 'host' && <><dt>Receiver queue</dt><dd>{formatDiagnosticMs(report.localQueueMs)}</dd><dt>Buffer target</dt><dd>{formatDiagnosticMs(report.localTargetMs)}</dd><dt>Buffer underruns</dt><dd>{report.localUnderruns ?? 'Unavailable'}</dd></>}<dt>Dropped packets</dt><dd>{report.localDropped ?? 'Unavailable'}</dd></>}
         {report.transport === 'Direct WebRTC' && <><dt>Network round trip</dt><dd>{formatDiagnosticMs(report.peerRoundTripMs)}</dd>
           {report.role === 'host' && <><dt>Receive buffer</dt><dd>{formatDiagnosticMs(report.receiverBufferMs)}</dd><dt>Network jitter</dt><dd>{formatDiagnosticMs(report.receiverJitterMs)}</dd><dt>Recent packet loss</dt><dd>{report.packetLossPercent === null ? 'Unavailable' : `${report.packetLossPercent}%`}</dd></>}
         </>}
