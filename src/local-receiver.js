@@ -44,7 +44,8 @@ export class LocalReceiver {
     this.closed = false;
     const transport = this.transport = openTransport(this.config, '/control?key=' + encodeURIComponent(this.config.key));
     try {
-      await timeout(transport.ready, 5000, 'Cannot reach the local receiver. Keep it running, allow local network access, and use the same Wi-Fi.');
+      // First use may wait for the browser's local-network permission prompt.
+      await timeout(transport.ready, 30000, 'Cannot reach the local receiver. Keep it running, allow local network access, and use the same Wi-Fi.');
       if (this.closed) throw new Error('Receiver closed.');
       const stream = await timeout(transport.createBidirectionalStream(), 3000, 'Receiver did not respond.');
       this.writer = stream.writable.getWriter(); this.reader = stream.readable.getReader(); this.connected = true;
@@ -99,7 +100,7 @@ export async function connectLocalSender(config) {
   if (!validLocalAudio(config)) throw new Error('Invalid local audio connection.');
   const transport = openTransport(config, '/audio?ticket=' + encodeURIComponent(config.ticket));
   try {
-    await timeout(transport.ready, 5000, 'Cannot reach the local receiver. Use the same Wi-Fi as the teacher and allow local network access.');
+    await timeout(transport.ready, 30000, 'Cannot reach the local receiver. Use the same Wi-Fi as the teacher and allow local network access.');
     // A reliable-only connection loses the intended deadline behavior.
     if (transport.reliability === 'reliable-only') throw new Error('This network does not support local audio datagrams.');
     try { transport.datagrams.outgoingMaxAge = 15; transport.datagrams.outgoingHighWaterMark = 3; } catch {}

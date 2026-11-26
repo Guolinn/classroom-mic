@@ -180,6 +180,7 @@ function Host({ room, go }) {
       <Connection value={connection} />
       <div className="host-layout"><section className="controls">
         {readReceiver() && <label className="receiver-output">Audio output<select aria-label="Audio output" value={localOutput ? 'local' : 'browser'} disabled={approving} onChange={e => changeOutput(e.target.value)}><option value="browser">Browser audio</option><option value="local">Local receiver (experimental)</option></select></label>}
+        {localOutput && <p className="hint">Keep this teacher page visible; background tabs may stop audio.</p>}
         <Notice error>{audio.receiverError}</Notice>
         <div className="sound-settings">
           <button className="text-button" onClick={testAudio}><Volume2 size={19} />Test speaker</button>

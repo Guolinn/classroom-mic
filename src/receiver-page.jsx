@@ -13,7 +13,7 @@ export function ReceiverPage({ go }) {
     <p>Experimental. Students use their browsers; the teacher runs this receiver on a Mac. Both devices must be on a network that allows them to connect directly.</p>
     <ol>
       <li><a href="/downloads/MicTurn-Receiver-macOS.zip" download>Download for Mac</a> (Apple silicon and Intel).</li>
-      <li>Unzip, then open <strong>Start Receiver.command</strong>. Keep its window open. It opens the teacher website with the receiver selected.</li>
+      <li>Unzip, then open <strong>Start Receiver.command</strong>. Keep its window open. It opens the teacher website with the receiver selected. Keep the teacher page visible during use; background tabs may stop audio.</li>
       <li>Choose the classroom speakers in macOS Sound settings before starting the receiver. Allow local network access if asked. Create a class and use <strong>Test speaker</strong> before approving a student.</li>
     </ol>
     <p>The download is not Apple-notarized. If macOS blocks it, review the download and use System Settings → Privacy &amp; Security → Open Anyway. Do not disable macOS security protections.</p>

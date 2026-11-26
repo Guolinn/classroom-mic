@@ -20,6 +20,14 @@ When the native receiver and the synthetic browser source used the same Mac outp
 
 Native revocation can reach a student before the cloud's mute state. Chromium also hid the session close code in one test. The final client gives an opaque transport failure 500 ms for the authoritative state to arrive; this affects error reporting, not playback buffering. The native queue is cleared immediately. The final normal-mute test returned the student to Microphone off without a false disconnection message.
 
+## Public deployment checks
+
+The public HTTPS smoke check passes all eleven checks: certificate, health, create, join, WebSocket upgrade, approval, relay, mute, local permission exchange, failure revocation and end class. GitHub's existing JavaScript test/build workflow passes. Native race tests and builds were run locally; this change does not modify the repository's CI workflow.
+
+Public-origin WebTransport attempts in the in-app browser and desktop Chrome did not finish. The browsers reported the local-network permission as `prompt`; localhost-origin testing had succeeded. Therefore a public-website-to-LAN audio run is **not yet verified**. This is distinct from the cloud permission/signaling checks above. The final connection timeout allows 30 seconds for first-use permission interaction, and the setup page asks users to allow local network access. No browser security settings or certificate checks were disabled. See [Chrome's local-network access guidance](https://developer.chrome.com/docs/modern-web-guidance/guides/security/local-network-access).
+
+The teacher page and setup instructions explicitly state that it must remain visible: background timer throttling can trigger the native one-second heartbeat cutoff. This limitation matters when presenting slides from another app and needs testing before classroom use.
+
 ## Remaining physical checks
 
 - Real iPhone Safari and campus Wi-Fi, including local-network permissions and client isolation.
