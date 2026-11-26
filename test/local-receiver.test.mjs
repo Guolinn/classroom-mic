@@ -5,6 +5,7 @@ import { readFile } from 'node:fs/promises';
 import { validEndpoint, validLocalAudio, parseReceiverCode } from '../shared/local-receiver.js';
 import { AudioDiagnostics } from '../src/diagnostics.js';
 import { ClassroomAudio } from '../src/audio.js';
+import { connectLocalSender } from '../src/local-receiver.js';
 
 test('receiver pairing accepts private endpoints and rejects remote hosts, credentials and malformed pins', () => {
   const hash = 'a'.repeat(43), key = 'b'.repeat(43);
@@ -48,4 +49,39 @@ test('a local handshake completing after mute cannot start microphone transmissi
   const pending=engine.startLocal(9,{url:'https://127.0.0.1:4444',hash:'a'.repeat(43),ticket:'b'.repeat(43)});
   engine.stopAll();ready();await pending;
   assert.equal(transport.wasClosed,true);assert.equal(engine.worklet,undefined);assert.equal(engine.grant,0);
+});
+
+test('local audio sends using Safari createWritable and legacy Chromium writable APIs', async t => {
+  const original = globalThis.WebTransport;
+  t.after(() => { if (original === undefined) delete globalThis.WebTransport; else globalThis.WebTransport = original; });
+  for (const modern of [true, false]) {
+    const sent = [];
+    const stream = new WritableStream({ write: bytes => sent.push([...bytes]) });
+    const datagrams = { outgoingMaxAge: null, ...(modern ? { outgoingMaxBufferedDatagrams: 0 } : { outgoingHighWaterMark: 0 }) };
+    if (modern) {
+      datagrams.createWritable = function () { assert.equal(this, datagrams); return stream; };
+      Object.defineProperty(datagrams, 'writable', { get() { throw new Error('The deprecated property must not be accessed when createWritable exists.'); } });
+    } else datagrams.writable = stream;
+    globalThis.WebTransport = class {
+      constructor() { this.ready = Promise.resolve(); this.closed = new Promise(() => {}); this.datagrams = datagrams; }
+      close() {}
+    };
+    const { writer } = await connectLocalSender({ url: 'https://192.168.1.3:4444', hash: 'a'.repeat(43), ticket: 'b'.repeat(43) });
+    await writer.write(new Uint8Array([1, 2, 3]));
+    assert.deepEqual(sent, [[1, 2, 3]]);
+    assert.equal(datagrams.outgoingMaxAge, 15);
+    assert.equal(datagrams[modern ? 'outgoingMaxBufferedDatagrams' : 'outgoingHighWaterMark'], 3);
+    writer.releaseLock();
+  }
+});
+
+test('an unavailable datagram writer closes the connection with an actionable error', async t => {
+  const original = globalThis.WebTransport; let transport;
+  t.after(() => { if (original === undefined) delete globalThis.WebTransport; else globalThis.WebTransport = original; });
+  globalThis.WebTransport = class {
+    constructor() { transport = this; this.ready = Promise.resolve(); this.closed = new Promise(() => {}); this.datagrams = {}; }
+    close() { this.wasClosed = true; }
+  };
+  await assert.rejects(connectLocalSender({ url: 'https://192.168.1.3:4444', hash: 'a'.repeat(43), ticket: 'b'.repeat(43) }), /cannot send local audio datagrams/);
+  assert.equal(transport.wasClosed, true);
 });

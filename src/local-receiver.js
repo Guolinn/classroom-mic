@@ -103,8 +103,16 @@ export async function connectLocalSender(config) {
     await timeout(transport.ready, 30000, 'Cannot reach the local receiver. Use the same Wi-Fi as the teacher and allow local network access.');
     // A reliable-only connection loses the intended deadline behavior.
     if (transport.reliability === 'reliable-only') throw new Error('This network does not support local audio datagrams.');
-    try { transport.datagrams.outgoingMaxAge = 15; transport.datagrams.outgoingHighWaterMark = 3; } catch {}
-    const writer = transport.datagrams.writable.getWriter();
+    const datagrams = transport.datagrams;
+    if (!datagrams) throw new Error('This browser cannot send local audio datagrams. Ask the teacher to select Browser audio.');
+    try { datagrams.outgoingMaxAge = 15; } catch {}
+    // Safari implements the current API; older Chromium uses the legacy names.
+    for (const name of ['outgoingMaxBufferedDatagrams', 'outgoingHighWaterMark']) {
+      try { if (name in datagrams) datagrams[name] = 3; } catch {}
+    }
+    const writable = typeof datagrams.createWritable === 'function' ? datagrams.createWritable() : datagrams.writable;
+    if (typeof writable?.getWriter !== 'function') throw new Error('This browser cannot send local audio datagrams. Ask the teacher to select Browser audio.');
+    const writer = writable.getWriter();
     return { transport, writer };
   } catch (e) { transport.close(); throw e; }
 }

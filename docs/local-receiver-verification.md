@@ -36,3 +36,9 @@ The teacher page and setup instructions explicitly state that it must remain vis
 - Subjective speech clarity, feedback, interruption frequency, Mac audio-device selection and background-tab behavior.
 
 The setup page labels the mode experimental, explains the Mac installation requirement and provides explicit return to Browser audio. Neither a 5 ms packet nor a small receiver queue establishes a 5 ms microphone-to-speaker result.
+
+## Safari datagram correction — November 25, 2026
+
+A physical iPhone test by the owner reported `undefined is not an object (evaluating 't.datagrams.writable.getWriter')` after the teacher's speaker test succeeded. The client reached this line after `transport.ready`, then failed because it assumed the legacy Chromium `writable` property. WebKit replaced that property with `createWritable()` ([WebKit change 302318](https://bugs.webkit.org/show_bug.cgi?id=302318)); the [current specification](https://www.w3.org/TR/webtransport/#datagram-duplex-stream) uses that method too.
+
+The sender now prefers `createWritable()`, falls back to legacy `writable`, recognizes both buffering-property names, and checks for a usable writer before calling it. Two added regression tests exercise both API shapes with real WritableStreams and ensure an unavailable writer closes the transport with an actionable message. Together with two download-resume tests, all 31 JavaScript tests pass. This is a frontend update; the receiver binary is unchanged. Physical iPhone audio after the correction still requires owner confirmation.
