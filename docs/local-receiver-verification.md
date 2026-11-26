@@ -44,3 +44,13 @@ A physical iPhone test by the owner reported `undefined is not an object (evalua
 The sender now prefers `createWritable()`, falls back to legacy `writable`, recognizes both buffering-property names, and checks for a usable writer before calling it. Two added regression tests exercise both API shapes with real WritableStreams and ensure an unavailable writer closes the transport with an actionable message. Together with two download-resume tests, all 31 JavaScript tests pass. This is a frontend update; the receiver binary is unchanged.
 
 After the correction was published, the owner confirmed normal audio after refreshing the phone page and requesting to speak again: iPhone Safari to Mac Chrome with the native receiver, on the same Wi-Fi. The iOS version was not provided. This confirms audible playback in that setup; it is not an instrumented end-to-end latency measurement or a classroom acoustic test.
+
+## Crackling correction — receiver 0.1.1, November 25, 2026
+
+The owner then reported loud crackling during speech, a clean local test tone and silence after mute. An active report contained 1,810 received packets, zero sequence losses, 19 underruns and 52 queue resets, with a 20 ms target. Those counters identify repeated interruptions inside the receiver, without proving that every noise source is software-related.
+
+The old 30 ms ceiling discarded the entire queue when a burst exceeded it. A deterministic 10-second simulation of 5 ms capture frames delivered in 32 ms batches reproduced 279 resets and 64 underruns. With receiver 0.1.1 the same simulation has zero resets and two initial underruns; 16 ms and 24 ms batches also avoid resets. This models batching and is not a replay of the owner's actual network trace.
+
+Version 0.1.1 preserves queued audio, allows transient bursts up to a 50 ms cap and removes only the oldest excess samples if that cap is exceeded. The initial target remains 5 ms, with the existing adaptive maximum of 20 ms. One millisecond of blending at loss, starvation, recovery and trimming boundaries reduces hard sample jumps; uninterrupted samples are unchanged. In a deliberately worst-case constant-sample loss/recovery test, transitions stay below 1,000 PCM units per sample instead of a 20,000-unit hard edge. Explicit mute and the control deadline remain immediate. Seven Go tests pass with the race detector; 31 JavaScript tests and the universal build pass.
+
+The receiver reports its version, queue trims and longest inter-packet arrival gap in Audio details. These diagnostics still do not measure total acoustic delay. The owner needs to quit the 0.1.0 receiver, open 0.1.1, create a class from the new paired tab, and retest. A physical-phone noise or latency improvement is not claimed before that check.

@@ -1,5 +1,7 @@
 # MicTurn local receiver — experimental
 
+Version 0.1.1 fixes repeated queue resets and hard audio edges that could cause crackling with batched incoming audio. Quit the older receiver before opening this version. Refresh both browser pages and create a new class from the newly opened receiver tab. The teacher's Audio details shows the connected receiver version.
+
 This Mac receiver lets students keep using the website while sending audio over local WebTransport datagrams instead of the browser WebRTC audio path. It is an alternative transport, not a zero-latency guarantee. Physical iPhone-to-classroom-speaker latency has not been measured for this release.
 
 ## Run
@@ -28,7 +30,7 @@ No audio is recorded or uploaded by the receiver. QUIC encrypts the local audio 
 
 The existing browser capture settings, high-pass filter, feedback guard and 3 ms limiter remain. A dedicated AudioWorklet emits 240 mono PCM16 samples at 48 kHz every 5 ms (with linear resampling if the browser context is 44.1 kHz). Packets carry a magic value, monotonically increasing sequence and rate. The sender discards worklet messages more than 30 ms old relative to its audio-context clock and permits at most three outstanding writes; datagram expiration is requested at 15 ms.
 
-The native receiver starts with 5 ms queued audio, adds 5 ms after an underrun up to a 20 ms target, and resets excessive queued audio above 30 ms. Each new speaker starts fresh. Late/reordered sequence numbers are discarded; up to two missing packets become silence. Longer gaps restart the queue. This is basic loss handling, not advanced speech reconstruction. These bounds cover application queues, **not** all browser, network, OS, device or acoustic latency. Capture timestamps are not synchronized across devices, so no complete one-way latency is inferred.
+The native receiver starts with 5 ms queued audio and adds 5 ms after an underrun up to a 20 ms target. It permits temporary arrival bursts up to 50 ms of queued audio; this is a cap, not a target or added fixed delay. When that cap is exceeded it removes only the oldest excess samples and keeps playback running. Each new speaker starts fresh. Late/reordered sequence numbers are discarded; up to two missing packets become silence, with one millisecond of blending at both boundaries. Starvation, recovery and queue trimming use the same blending to avoid hard waveform jumps. Longer gaps restart the queue. Explicit mute, revocation and heartbeat expiry still silence immediately. This is basic loss handling, not advanced speech reconstruction. These bounds cover application queues, **not** all browser, network, OS, device or acoustic latency. Capture timestamps are not synchronized across devices, so no complete one-way latency is inferred.
 
 CoreAudio output uses malgo/miniaudio at 48 kHz with a requested 128-frame period and two periods. The OS/device may choose different buffering. This prototype uses a short mutex-protected Go audio queue; it does not claim hard real-time scheduling guarantees. Sound output is native, not another browser audio element. The cloud server still handles speaking permissions, so Internet is needed to manage the class even though local audio does not go through the cloud.
 

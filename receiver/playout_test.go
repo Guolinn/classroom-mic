@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/binary"
+	"math"
 	"testing"
 	"time"
 )
@@ -69,7 +70,7 @@ func TestDuplicateStaleAndBurst(t *testing.T) {
 		p.push(packet(i, 1000), now)
 	}
 	s := p.snapshot()
-	if s.QueueMs > 30 || s.Resets == 0 {
+	if s.QueueMs > 50 || s.Trims == 0 || s.Resets != 0 {
 		t.Fatalf("unbounded backlog: %+v", s)
 	}
 	if p.push([]byte("bad"), now) {
@@ -79,6 +80,107 @@ func TestDuplicateStaleAndBurst(t *testing.T) {
 	binary.LittleEndian.PutUint32(b[8:], 44100)
 	if p.push(b, now) {
 		t.Fatal("wrong rate accepted")
+	}
+}
+
+func TestBatchedPacketsDoNotResetAndRefill(t *testing.T) {
+	for _, batch := range []time.Duration{16 * time.Millisecond, 24 * time.Millisecond, 32 * time.Millisecond} {
+		p := newPlayout()
+		base := time.Now()
+		seq := uint32(0)
+		nextBatch := batch
+		out := make([]byte, 256) // Native 128-frame callbacks.
+		for frames := 0; frames < rate*10; frames += 128 {
+			elapsed := time.Duration(frames) * time.Second / rate
+			now := base.Add(elapsed)
+			p.heartbeat = now
+			for nextBatch <= elapsed {
+				for time.Duration(seq+1)*5*time.Millisecond <= nextBatch {
+					p.push(packet(seq, 1000), base.Add(nextBatch))
+					seq++
+				}
+				nextBatch += batch
+			}
+			p.render(out, now)
+		}
+		s := p.snapshot()
+		t.Logf("batch=%v stats=%+v", batch, s)
+		if s.Resets != 0 || s.Underruns > 3 || s.Played < 470000 {
+			t.Fatalf("batched capture caused repeated interruptions: %+v", s)
+		}
+		if s.QueueMs > 50 || s.TargetMs > 20 {
+			t.Fatal("unbounded latency policy")
+		}
+	}
+}
+
+func maxStep(out []byte, previous int16) int {
+	largest := 0
+	for i := 0; i+1 < len(out); i += 2 {
+		next := int16(binary.LittleEndian.Uint16(out[i:]))
+		step := int(math.Abs(float64(int(next) - int(previous))))
+		if step > largest {
+			largest = step
+		}
+		previous = next
+	}
+	return largest
+}
+func TestLossAndRecoveryDoNotInjectFullScaleSteps(t *testing.T) {
+	p := newPlayout()
+	now := time.Now()
+	p.beat()
+	p.setVolume(1)
+	p.push(packet(0, 20000), now)
+	p.render(make([]byte, 480), now)
+	p.push(packet(2, -20000), now.Add(10*time.Millisecond))
+	out := make([]byte, 960)
+	p.render(out, now.Add(10*time.Millisecond))
+	if step := maxStep(out, 20000); step > 1000 {
+		t.Fatalf("loss inserted an audible hard edge: %d", step)
+	}
+	// Starvation and later recovery are smoothed too, without extending mute.
+	out = make([]byte, 480)
+	p.render(out, now.Add(15*time.Millisecond))
+	if step := maxStep(out, -20000); step > 1000 {
+		t.Fatalf("starvation inserted hard edge: %d", step)
+	}
+	p.push(packet(3, 20000), now.Add(20*time.Millisecond))
+	p.push(packet(4, 20000), now.Add(25*time.Millisecond))
+	p.render(out, now.Add(25*time.Millisecond))
+	if step := maxStep(out, 0); step > 1000 {
+		t.Fatalf("recovery inserted hard edge: %d", step)
+	}
+	p.reset()
+	p.render(out, now.Add(25*time.Millisecond))
+	for _, v := range out {
+		if v != 0 {
+			t.Fatal("explicit mute must remain immediate")
+		}
+	}
+}
+
+func TestOverflowTrimsOldAudioWithoutStoppingPlayback(t *testing.T) {
+	p := newPlayout()
+	now := time.Now()
+	p.beat()
+	p.setVolume(1)
+	p.push(packet(0, 20000), now)
+	p.render(make([]byte, 256), now)
+	for seq := uint32(1); seq < 14; seq++ {
+		p.push(packet(seq, -20000), now)
+	}
+	before := p.snapshot()
+	if before.Trims == 0 || before.Resets != 0 || before.QueueMs > 50 || !p.started {
+		t.Fatalf("overflow stopped playback: %+v", before)
+	}
+	out := make([]byte, 256)
+	p.render(out, now)
+	if step := maxStep(out, 20000); step > 1000 {
+		t.Fatalf("queue trim inserted hard edge: %d", step)
+	}
+	if p.snapshot().Underruns != 0 {
+		t.Fatal("trimming created a needless underrun")
 	}
 }
 func TestUnderrunRecoveryAndSpeakerReset(t *testing.T) {
@@ -94,7 +196,9 @@ func TestUnderrunRecoveryAndSpeakerReset(t *testing.T) {
 		p.push(packet(i, 1000), now)
 		p.render(make([]byte, 4000), now)
 	}
-	if p.snapshot().TargetMs > 20 { t.Fatal("unbounded recovery target") }
+	if p.snapshot().TargetMs > 20 {
+		t.Fatal("unbounded recovery target")
+	}
 	p.reset()
 	if p.snapshot().TargetMs != 5 {
 		t.Fatal("next speaker inherited recovery buffer")

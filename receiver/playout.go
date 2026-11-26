@@ -8,30 +8,39 @@ import (
 )
 
 const rate = 48000
-const frameSamples = 240 // Five milliseconds, mono PCM16.
+const frameSamples = 240      // Five milliseconds, mono PCM16.
+const maxQueuedSamples = 2400 // Burst allowance, not a target: at most 50 ms.
+const spliceSamples = 48      // One millisecond of blending at discontinuities.
 
 // These counters describe this queue only, never acoustic end-to-end latency.
 type audioStats struct {
-	OutputCallbacks uint64 `json:"outputCallbacks"`
-	Received  uint64  `json:"received"`
-	Played    uint64  `json:"playedSamples"`
-	Dropped   uint64  `json:"dropped"`
-	Underruns uint64  `json:"underruns"`
-	Resets    uint64  `json:"resets"`
-	QueueMs   float64 `json:"queueMs"`
-	TargetMs  float64 `json:"targetMs"`
+	OutputCallbacks uint64  `json:"outputCallbacks"`
+	Received        uint64  `json:"received"`
+	Played          uint64  `json:"playedSamples"`
+	Dropped         uint64  `json:"dropped"`
+	Underruns       uint64  `json:"underruns"`
+	Resets          uint64  `json:"resets"`
+	Trims           uint64  `json:"trims"`
+	Trimmed         uint64  `json:"trimmedSamples"`
+	MaxGapMs        float64 `json:"maxArrivalGapMs"`
+	QueueMs         float64 `json:"queueMs"`
+	TargetMs        float64 `json:"targetMs"`
 }
 
 type playout struct {
-	mu                    sync.Mutex
-	buf                   [4096]int16
-	head, size, target    int
-	started, seen         bool
-	seq                   uint32
-	volume                float64
-	lastPacket, heartbeat time.Time
-	stats                 audioStats
-	tone                  int
+	mu                      sync.Mutex
+	buf                     [4096]int16
+	boundary                [4096]bool
+	head, size, target      int
+	started, seen           bool
+	seq                     uint32
+	volume                  float64
+	lastPacket, heartbeat   time.Time
+	stats                   audioStats
+	tone                    int
+	lastSample, spliceFrom  float64
+	spliceLeft              int
+	hadAudio, splicePending bool
 }
 
 func newPlayout() *playout { return &playout{target: frameSamples, volume: .5} }
@@ -42,6 +51,9 @@ func (p *playout) reset() {
 	p.started, p.seen = false, false
 	p.stats = audioStats{}
 	p.tone = 0
+	p.lastPacket = time.Time{}
+	p.lastSample, p.spliceFrom, p.spliceLeft = 0, 0, 0
+	p.hadAudio, p.splicePending = false, false
 }
 func (p *playout) beat() { p.mu.Lock(); p.heartbeat = time.Now(); p.mu.Unlock() }
 func (p *playout) setVolume(v float64) {
@@ -62,6 +74,32 @@ func (p *playout) snapshot() audioStats {
 	return s
 }
 
+func (p *playout) appendSample(sample int16, boundary bool) {
+	i := (p.head + p.size) % len(p.buf)
+	p.buf[i], p.boundary[i] = sample, boundary
+	p.size++
+}
+func (p *playout) beginSplice() {
+	p.spliceFrom, p.spliceLeft = p.lastSample, spliceSamples
+}
+func (p *playout) smooth(sample float64) int16 {
+	if p.spliceLeft > 0 {
+		weight := float64(spliceSamples-p.spliceLeft+1) / spliceSamples
+		sample = p.spliceFrom*(1-weight) + sample*weight
+		p.spliceLeft--
+	}
+	p.lastSample = sample
+	return int16(sample * p.volume)
+}
+func (p *playout) clearQueue() {
+	p.head, p.size = 0, 0
+	p.started = false
+	if p.hadAudio {
+		p.beginSplice()
+	}
+	p.stats.Resets++
+}
+
 // Header: ASCII MT01, sequence uint32 LE, sample rate uint32 LE, 240 PCM16 samples.
 // Authentication is bound to the WebTransport session, not supplied by packets.
 func (p *playout) push(b []byte, now time.Time) bool {
@@ -75,29 +113,37 @@ func (p *playout) push(b []byte, now time.Time) bool {
 		p.stats.Dropped++
 		return false
 	}
+	if !p.lastPacket.IsZero() {
+		p.stats.MaxGapMs = math.Max(p.stats.MaxGapMs, float64(now.Sub(p.lastPacket))/float64(time.Millisecond))
+		if now.Sub(p.lastPacket) > 100*time.Millisecond {
+			p.clearQueue()
+		}
+	}
+	gapBoundary := false
 	if p.seen && seq-p.seq > 1 {
 		gap := seq - p.seq - 1
 		p.stats.Dropped += uint64(gap)
-		// A short missing packet becomes silence; a long gap starts fresh.
-		if gap <= 2 && p.size+int(gap)*frameSamples < 1440 {
+		// Smooth both ends of short losses instead of hard-cutting to/from zero.
+		if gap <= 2 && p.size+int(gap+1)*frameSamples <= maxQueuedSamples {
 			for i := 0; i < int(gap)*frameSamples; i++ {
-				p.buf[(p.head+p.size)%len(p.buf)] = 0
-				p.size++
+				p.appendSample(0, i == 0)
 			}
+			gapBoundary = true
 		} else {
-			p.head, p.size = 0, 0
-			p.started = false
-			p.stats.Resets++
+			p.clearQueue()
 		}
 	}
-	if p.size+frameSamples > 1440 || (!p.lastPacket.IsZero() && now.Sub(p.lastPacket) > 100*time.Millisecond) {
-		p.head, p.size = 0, 0
-		p.started = false
-		p.stats.Resets++
+	if excess := p.size + frameSamples - maxQueuedSamples; excess > 0 {
+		// Keep useful audio and playback running. Emptying the entire queue here
+		// caused a repeated reset/refill cycle with batched browser callbacks.
+		p.head = (p.head + excess) % len(p.buf)
+		p.size -= excess
+		p.stats.Trims++
+		p.stats.Trimmed += uint64(excess)
+		p.splicePending = true
 	}
 	for i := 0; i < frameSamples; i++ {
-		p.buf[(p.head+p.size)%len(p.buf)] = int16(binary.LittleEndian.Uint16(b[12+i*2:]))
-		p.size++
+		p.appendSample(int16(binary.LittleEndian.Uint16(b[12+i*2:])), gapBoundary && i == 0)
 	}
 	p.seq, p.seen, p.lastPacket = seq, true, now
 	p.stats.Received++
@@ -114,6 +160,8 @@ func (p *playout) render(out []byte, now time.Time) {
 		p.size = 0
 		p.started = false
 		p.tone = 0
+		p.lastSample, p.spliceLeft = 0, 0
+		p.hadAudio, p.splicePending = false, false
 		return
 	}
 	if p.tone > 0 {
@@ -127,27 +175,38 @@ func (p *playout) render(out []byte, now time.Time) {
 		return
 	}
 	if now.Sub(p.lastPacket) > 100*time.Millisecond {
-		p.size = 0
-		p.started = false
-		return
+		if p.size > 0 || p.started {
+			p.clearQueue()
+		}
 	}
 	if !p.started {
-		if p.size < p.target {
-			return
+		if p.size >= p.target {
+			p.started = true
+			if p.hadAudio {
+				p.beginSplice()
+			}
 		}
-		p.started = true
 	}
 	for i := 0; i+1 < len(out); i += 2 {
-		if p.size == 0 {
+		if p.started && p.size == 0 {
 			p.started = false
 			p.target = min(p.target+frameSamples, 4*frameSamples)
 			p.stats.Underruns++
-			return
+			p.beginSplice()
 		}
-		v := int16(float64(p.buf[p.head]) * p.volume)
+		var sample float64
+		if p.started {
+			if p.splicePending || p.boundary[p.head] {
+				p.beginSplice()
+				p.splicePending = false
+			}
+			sample = float64(p.buf[p.head])
+			p.head = (p.head + 1) % len(p.buf)
+			p.size--
+			p.hadAudio = true
+			p.stats.Played++
+		}
+		v := p.smooth(sample)
 		binary.LittleEndian.PutUint16(out[i:], uint16(v))
-		p.head = (p.head + 1) % len(p.buf)
-		p.size--
-		p.stats.Played++
 	}
 }

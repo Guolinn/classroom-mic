@@ -35,7 +35,7 @@ import (
 	"github.com/quic-go/webtransport-go"
 )
 
-var version = "0.1.0"
+var version = "0.1.1"
 
 type receiver struct {
 	mu                        sync.Mutex
@@ -111,7 +111,7 @@ func (r *receiver) serveControl(s *webtransport.Session) {
 		default:
 			return
 		}
-		response, _ := json.Marshal(map[string]any{"id": msg.ID, "ok": true, "stats": r.player.snapshot()})
+		response, _ := json.Marshal(map[string]any{"id": msg.ID, "ok": true, "version": version, "stats": r.player.snapshot()})
 		stream.SetWriteDeadline(time.Now().Add(time.Second))
 		if _, err := stream.Write(append(response, '\n')); err != nil {
 			return

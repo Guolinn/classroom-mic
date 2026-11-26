@@ -65,6 +65,7 @@ export class LocalReceiver {
       while ((end = text.indexOf('\n')) >= 0) {
         const msg = JSON.parse(text.slice(0, end)); text = text.slice(end + 1);
         if (msg.stats) this.stats = msg.stats;
+        if (typeof msg.version === 'string') this.version = msg.version;
         this.pending.get(msg.id)?.resolve(msg); this.pending.delete(msg.id);
       }
     }
