@@ -1,0 +1,14 @@
+classroom-mic.beringtech.com {
+    handle /downloads/* {
+        root * /opt/classroom-mic/current/dist
+        header X-Content-Type-Options nosniff
+        header Cache-Control no-cache
+        @receiver path /downloads/MicTurn-Receiver-macOS.zip
+        header @receiver Content-Disposition "attachment; filename=MicTurn-Receiver-macOS.zip"
+        file_server
+    }
+    handle {
+        encode gzip
+        reverse_proxy 127.0.0.1:3000
+    }
+}
