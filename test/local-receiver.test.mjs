@@ -28,7 +28,12 @@ test('local capture emits ordered five-millisecond datagrams at 48 and 44.1 kHz,
     for(let i=0;i<blocks;i++){context.currentTime=i*128/rate;p.process([[new Float32Array(128).fill(.25)]]);}
     assert.ok(messages.length>=199 && messages.length<=201,`bad duration at ${rate}`);
     messages.forEach((m,i)=>{const b=new DataView(m.buffer);assert.equal(b.byteLength,492);assert.equal(b.getUint32(0,true),0x3130544d);assert.equal(b.getUint32(4,true),i);assert.equal(b.getUint32(8,true),48000);assert.ok(Math.abs(b.getInt16(12,true)-8192)<2)});
+    const direct=[]; let portClosed=false;
+    p.port.onmessage({data:{type:'sender-port',port:{postMessage:m=>direct.push(m),close:()=>{portClosed=true}}}});
+    p.process([[new Float32Array(512).fill(.25)]]);
+    assert.ok(direct.length >= 2); assert.ok(Number.isFinite(direct[0].producedAt));
     const before=messages.length;p.port.onmessage({data:'stop'});assert.equal(p.process([[new Float32Array(128)]]),false);assert.equal(messages.length,before);
+    assert.equal(portClosed,true);
   }
 });
 

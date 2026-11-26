@@ -3,7 +3,13 @@ class LocalPcmCapture extends AudioWorkletProcessor {
   constructor() {
     super(); this.frame = new Int16Array(240); this.offset = 0; this.seq = 0;
     this.phase = 0; this.previous = 0; this.stopped = false;
-    this.port.onmessage = ({ data }) => { if (data === 'stop') this.stopped = true; };
+    this.senderPort = this.port; this.lastCaptureAt = null; this.maxCaptureGapMs = 0;
+    this.port.onmessage = ({ data }) => {
+      if (data === 'stop') { this.stopped = true; if (this.senderPort !== this.port) this.senderPort.close(); }
+      else if (data?.type === 'sender-port') {
+        if (this.stopped) data.port.close(); else this.senderPort = data.port;
+      }
+    };
   }
   sample(value) {
     this.frame[this.offset++] = Math.round(Math.max(-1, Math.min(1, value)) * 32767);
@@ -12,11 +18,14 @@ class LocalPcmCapture extends AudioWorkletProcessor {
     view.setUint32(0, 0x3130544d, true); // MT01
     view.setUint32(4, this.seq++, true); view.setUint32(8, 48000, true);
     for (let i = 0; i < 240; i++) view.setInt16(12 + i * 2, this.frame[i], true);
-    this.port.postMessage({ buffer, contextTime: currentTime }, [buffer]); this.offset = 0;
+    this.senderPort.postMessage({ buffer, contextTime: currentTime, producedAt: Date.now(), maxCaptureGapMs: this.maxCaptureGapMs }, [buffer]); this.offset = 0;
   }
   process(inputs) {
     if (this.stopped) return false;
     const input = inputs[0]?.[0]; if (!input?.length) return true;
+    const now = Date.now();
+    if (this.lastCaptureAt !== null) this.maxCaptureGapMs = Math.max(this.maxCaptureGapMs, now - this.lastCaptureAt);
+    this.lastCaptureAt = now;
     if (sampleRate === 48000) { for (const value of input) this.sample(value); }
     else {
       // Streaming linear resampling keeps packet duration fixed at 44.1 kHz too.

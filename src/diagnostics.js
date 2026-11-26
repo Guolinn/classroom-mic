@@ -10,6 +10,7 @@ export class AudioDiagnostics {
     const active = !!grant;
     const track = engine.stream?.getAudioTracks()[0];
     const settings = track?.getSettings?.() || {};
+    const sender = active && mode === 'local' && engine.role === 'student' ? engine.localSenderStats : null;
     const report = {
       role: engine.role,
       transport: active ? mode === 'local' ? 'Local receiver' : mode === 'relay' ? 'Server relay' : 'Direct WebRTC' : 'Inactive',
@@ -26,6 +27,11 @@ export class AudioDiagnostics {
       localTrimmedMs: active && mode === 'local' && engine.role === 'host' ? milliseconds(value(engine.localReceiver?.stats?.trimmedSamples) === null ? undefined : engine.localReceiver.stats.trimmedSamples / 48000) : null,
       localMaxArrivalGapMs: active && mode === 'local' && engine.role === 'host' ? value(engine.localReceiver?.stats?.maxArrivalGapMs) : null,
       localSent: active && mode === 'local' && engine.role === 'student' ? value(engine.localSent) : null,
+      localSenderPath: sender?.path ?? null,
+      localMaxCaptureGapMs: value(sender?.maxCaptureGapMs),
+      localMaxDispatchLagMs: value(sender?.maxDispatchLagMs),
+      localMaxSendGapMs: value(sender?.maxSendGapMs),
+      localMaxWriteMs: value(sender?.maxWriteMs),
       connection: active && mode === 'direct' ? peer?.connectionState || 'connecting' : null,
       peerRoundTripMs: null,
       receiverJitterMs: null,

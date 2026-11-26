@@ -1,6 +1,7 @@
 import { FeedbackGuard } from './feedback.js';
 import { PcmPlayout } from './pcm-playout.js';
-import { LocalReceiver, connectLocalSender } from './local-receiver.js';
+import { LocalReceiver } from './local-receiver.js';
+import { openLocalAudioSender } from './local-audio-sender.js';
 
 export class ClassroomAudio {
   constructor(role, send, binary, update) {
@@ -261,9 +262,13 @@ export class ClassroomAudio {
       this.status(''); return;
     }
     const current = () => !this.destroyed && this.grant === grant && this.desiredGrant === grant && this.mode === 'local' && this.desiredMode === 'local';
-    const { transport, writer } = await connectLocalSender(config);
+    this.localSenderStats = null;
+    const transport = await openLocalAudioSender(config, stats => {
+      if (!current()) return;
+      this.localSenderStats = stats; this.localSent = stats.sent; this.localDropped = stats.dropped;
+    }, data => (this.ctx?.currentTime || 0) - data.contextTime);
     if (!current()) { transport.close(); return; }
-    this.localTransport = transport; this.localWriter = writer;
+    this.localTransport = transport;
     const failed = () => {
       if (this.localTransport !== transport || !current()) return;
       if (this.localFailureTimer) return;
@@ -289,17 +294,8 @@ export class ClassroomAudio {
     const worklet = this.worklet = new AudioWorkletNode(ctx, 'local-pcm-capture');
     worklet.addEventListener('processorerror', failed);
     this.zero = ctx.createGain(); this.zero.gain.value = 0;
+    transport.attach(worklet);
     this.voiceProcessor.connect(worklet); worklet.connect(this.zero); this.zero.connect(ctx.destination);
-    let pending = 0; this.localDropped = 0; this.localSent = 0;
-    worklet.port.onmessage = ({ data }) => {
-      if (!current() || this.worklet !== worklet) return;
-      // Do not drain an old main-thread backlog after a stall.
-      // Audio callbacks can arrive in small batches. Allow at most 15 ms in
-      // flight, rather than dropping every second callback in a healthy batch.
-      if (pending >= 3 || ctx.currentTime - data.contextTime > .03) { this.localDropped++; return; }
-      pending++; this.localSent++;
-      writer.write(new Uint8Array(data.buffer)).catch(failed).finally(() => { pending--; });
-    };
     this.status('');
   }
   receivePcm(buffer) {
