@@ -233,7 +233,7 @@ function Student({ room, session, go }) {
     <div className="page-heading"><h1>{state.title}</h1><button className="text-button" onClick={() => { engine.current.stopAll(); send({ type: 'leave' }); go('/'); }}><LogOut size={16} />Leave</button></div>
     <div className="student-meta"><span>{state.me.name}</span><span>{state.code}</span></div>
     <Connection value={connection} />
-    <div className="student-status" aria-live="polite"><h2>{active ? 'Microphone on' : waiting ? 'Waiting for approval' : state.paused ? 'Requests paused' : !state.hostOnline ? 'Waiting for teacher' : 'Microphone off'}</h2>
+    <div className="student-status" aria-live="polite"><h2>{active ? state.mode === 'local' && !audio.localSending ? 'Connecting microphone…' : 'Microphone on' : waiting ? 'Waiting for approval' : state.paused ? 'Requests paused' : !state.hostOnline ? 'Waiting for teacher' : 'Microphone off'}</h2>
       {waiting && <p>Position {state.me.position || 1}</p>}
     </div>
     <button className={`mic-button ${active ? 'live' : waiting ? 'waiting' : ''}`} disabled={disabled} onClick={action} aria-label={active ? 'Stop speaking' : waiting ? 'Cancel request' : busy ? 'Opening microphone' : 'Request to speak'}>{active ? <MicOff size={42} strokeWidth={1.6} /> : waiting ? <Hand size={42} strokeWidth={1.6} /> : <Mic size={42} strokeWidth={1.6} />}</button>

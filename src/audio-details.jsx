@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { AudioDiagnostics, formatDiagnosticMs } from './diagnostics';
+import { AudioDiagnostics, formatDiagnosticMs, localStageLabels } from './diagnostics';
 
 export function AudioDetails({ engine }) {
   const [open, setOpen] = useState(false), [report, setReport] = useState(null), [copied, setCopied] = useState(false);
@@ -31,6 +31,8 @@ export function AudioDetails({ engine }) {
     {open && report && <>
       <dl>
         <dt>Connection</dt><dd>{report.transport}{report.connection ? ` · ${report.connection}` : ''}</dd>
+        {report.transport === 'Local receiver' && <><dt>Audio stage</dt><dd>{localStageLabels[report.localStage] || 'Unavailable'}</dd><dt>Page visibility</dt><dd>{report.pageVisibility || 'Unavailable'}</dd></>}
+        {report.transport === 'Local receiver' && report.role === 'student' && <><dt>Audio processing</dt><dd>{report.audioContextState || 'Unavailable'}</dd><dt>Microphone track</dt><dd>{report.microphoneTrackState || 'Unavailable'}</dd></>}
         {report.transport === 'Local receiver' && report.role === 'host' && <><dt>Receiver version</dt><dd>{report.localReceiverVersion || 'Not reported'}</dd><dt>Queue resets</dt><dd>{report.localResets ?? 'Unavailable'}</dd><dt>Queue trims</dt><dd>{report.localTrims ?? 'Unavailable'}</dd><dt>Longest packet gap</dt><dd>{formatDiagnosticMs(report.localMaxArrivalGapMs)}</dd></>}
         {report.transport === 'Local receiver' && report.role === 'host' && <><dt>Recent queue minimum / maximum</dt><dd>{formatDiagnosticMs(report.localQueueFloorMs)} / {formatDiagnosticMs(report.localQueuePeakMs)}</dd><dt>Playback rate adjustment</dt><dd>{report.localClockCorrectionPpm == null ? 'Unavailable' : `${(report.localClockCorrectionPpm / 10000).toFixed(3)}%`}</dd><dt>Longest output callback gap</dt><dd>{formatDiagnosticMs(report.localMaxOutputGapMs)}</dd></>}
         {report.transport === 'Local receiver' && report.role === 'host' && <><dt>Catch-up events</dt><dd>{report.localCatchupEvents ?? 'Unavailable'}</dd><dt>Audio time compressed</dt><dd>{formatDiagnosticMs(report.localCatchupMs)}</dd></>}

@@ -43,22 +43,27 @@ export class LocalReceiver {
   async open() {
     this.closed = false;
     const transport = this.transport = openTransport(this.config, '/control?key=' + encodeURIComponent(this.config.key));
+    const current = () => !this.closed && this.transport === transport;
     try {
       // First use may wait for the browser's local-network permission prompt.
       await timeout(transport.ready, 30000, 'Cannot reach the local receiver. Keep it running, allow local network access, and use the same Wi-Fi.');
-      if (this.closed) throw new Error('Receiver closed.');
+      if (!current()) throw new Error('Receiver closed.');
       const stream = await timeout(transport.createBidirectionalStream(), 3000, 'Receiver did not respond.');
+      if (!current()) throw new Error('Receiver closed.');
       this.writer = stream.writable.getWriter(); this.reader = stream.readable.getReader(); this.connected = true;
-      this.readResponses().catch(() => this.fail());
-      transport.closed.then(() => this.fail(), () => this.fail());
+      this.readResponses(this.reader, transport).catch(() => this.fail(transport));
+      transport.closed.then(() => this.fail(transport), () => this.fail(transport));
       await this.request('ping');
-      this.timer = setInterval(() => { this.request('ping').catch(() => this.fail()); }, 250);
-    } catch (e) { this.close(); throw e; }
+      if (!current()) throw new Error('Receiver closed.');
+      this.timer = setInterval(() => { if (current()) this.request('ping').catch(() => this.fail(transport)); }, 250);
+    } catch (e) { if (this.transport === transport) this.close(); throw e; }
   }
-  async readResponses() {
+  async readResponses(reader, transport) {
     const decoder = new TextDecoder(); let text = '';
-    while (!this.closed) {
-      const { value, done } = await this.reader.read(); if (done) break;
+    while (!this.closed && this.transport === transport) {
+      const { value, done } = await reader.read();
+      if (this.closed || this.transport !== transport) return;
+      if (done) break;
       text += decoder.decode(value, { stream: true });
       if (text.length > 16384) throw new Error('Invalid receiver response.');
       let end;
@@ -69,14 +74,17 @@ export class LocalReceiver {
         this.pending.get(msg.id)?.resolve(msg); this.pending.delete(msg.id);
       }
     }
-    this.fail();
+    this.fail(transport);
   }
   request(type, extra = {}) {
     if (!this.connected || this.closed) return Promise.reject(new Error('Local receiver is disconnected.'));
     const id = ++this.id;
+    const transport = this.transport;
     const pending = new Promise((resolve, reject) => { this.pending.set(id, { resolve, reject }); });
-    this.writer.write(new TextEncoder().encode(JSON.stringify({ id, type, ...extra }) + '\n')).catch(() => this.fail());
-    return timeout(pending, 850, 'Receiver did not respond.').finally(() => this.pending.delete(id));
+    this.writer.write(new TextEncoder().encode(JSON.stringify({ id, type, ...extra }) + '\n')).catch(() => this.fail(transport));
+    return timeout(pending, 850, 'Receiver did not respond.')
+      .catch(error => { this.fail(transport); throw error; })
+      .finally(() => this.pending.delete(id));
   }
   async arm(volume) {
     await this.connect();
@@ -87,9 +95,9 @@ export class LocalReceiver {
   }
   async mute() {
     this.armedTicket = null;
-    if (this.connected) try { await this.request('mute'); } catch { this.fail(); }
+    if (this.connected) try { await this.request('mute'); } catch { /* request already closed its own session */ }
   }
-  fail() { if (this.closed) return; this.close(); this.onFailure?.(); }
+  fail(transport = this.transport) { if (this.closed || this.transport !== transport) return; this.close(); this.onFailure?.(); }
   close() {
     this.closed = true; this.connected = false; this.armedTicket = null; clearInterval(this.timer);
     for (const p of this.pending.values()) p.reject(new Error('Local receiver disconnected.')); this.pending.clear();
@@ -97,11 +105,19 @@ export class LocalReceiver {
   }
 }
 
-export async function connectLocalSender(config) {
+export async function connectLocalSender(config, signal) {
   if (!validLocalAudio(config)) throw new Error('Invalid local audio connection.');
+  if (signal?.aborted) throw new DOMException('Cancelled.', 'AbortError');
   const transport = openTransport(config, '/audio?ticket=' + encodeURIComponent(config.ticket));
+  let abort;
   try {
-    await timeout(transport.ready, 30000, 'Cannot reach the local receiver. Use the same Wi-Fi as the teacher and allow local network access.');
+    const cancelled = new Promise((_, reject) => {
+      abort = () => { transport.close(); reject(new DOMException('Cancelled.', 'AbortError')); };
+      signal?.addEventListener('abort', abort, { once: true });
+      if (signal?.aborted) abort();
+    });
+    await timeout(Promise.race([transport.ready, cancelled]), 30000, 'Cannot reach the local receiver. Use the same Wi-Fi as the teacher and allow local network access.');
+    if (signal?.aborted) throw new DOMException('Cancelled.', 'AbortError');
     // A reliable-only connection loses the intended deadline behavior.
     if (transport.reliability === 'reliable-only') throw new Error('This network does not support local audio datagrams.');
     const datagrams = transport.datagrams;
@@ -116,4 +132,5 @@ export async function connectLocalSender(config) {
     const writer = writable.getWriter();
     return { transport, writer };
   } catch (e) { transport.close(); throw e; }
+  finally { signal?.removeEventListener('abort', abort); }
 }

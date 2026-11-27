@@ -111,3 +111,19 @@ test('local clock and output diagnostics preserve negative correction and suppor
   engine.grant = 0;
   assert.equal((await sampler.sample(engine)).localMaxOutputGapMs, null);
 });
+
+test('approved local audio is distinguishable from an established sender or received audio', async () => {
+  const sampler = new AudioDiagnostics();
+  const student = { role: 'student', grant: 1, mode: 'local', localStage: 'connecting', ctx: { state: 'running' }, stream: { getAudioTracks: () => [{ readyState: 'live', enabled: true }] } };
+  const report = await sampler.sample(student);
+  assert.equal(report.localStage, 'connecting'); assert.equal(report.localSent, null);
+  assert.equal(report.audioContextState, 'running'); assert.equal(report.microphoneTrackState, 'live'); assert.equal(report.microphoneEnabled, true);
+  const host = { role: 'host', grant: 1, mode: 'local', localReceiver: { connected: true, stats: { received: 0 } } };
+  assert.equal((await sampler.sample(host)).localStage, 'waiting-phone');
+  host.localReceiver.stats.received = 20;
+  assert.equal((await sampler.sample(host)).localStage, 'audio-received');
+  host.localReceiver.connected = false;
+  assert.equal((await sampler.sample(host)).localStage, 'disconnected');
+  host.grant = 0;
+  assert.equal((await sampler.sample(host)).localStage, null);
+});

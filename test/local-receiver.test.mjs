@@ -5,7 +5,7 @@ import { readFile } from 'node:fs/promises';
 import { validEndpoint, validLocalAudio, parseReceiverCode } from '../shared/local-receiver.js';
 import { AudioDiagnostics } from '../src/diagnostics.js';
 import { ClassroomAudio } from '../src/audio.js';
-import { connectLocalSender } from '../src/local-receiver.js';
+import { connectLocalSender, LocalReceiver } from '../src/local-receiver.js';
 
 test('receiver pairing accepts private endpoints and rejects remote hosts, credentials and malformed pins', () => {
   const hash = 'a'.repeat(43), key = 'b'.repeat(43);
@@ -89,4 +89,108 @@ test('an unavailable datagram writer closes the connection with an actionable er
   };
   await assert.rejects(connectLocalSender({ url: 'https://192.168.1.3:4444', hash: 'a'.repeat(43), ticket: 'b'.repeat(43) }), /cannot send local audio datagrams/);
   assert.equal(transport.wasClosed, true);
+});
+
+test('mute cancels a never-ready local handshake and lets a new speaking turn proceed', { timeout: 1000 }, async t => {
+  const original = globalThis.WebTransport; let transport;
+  globalThis.WebTransport = class {
+    constructor() { transport = this; this.ready = new Promise(() => {}); this.closed = new Promise(() => {}); }
+    close() { this.wasClosed = true; }
+  };
+  t.after(() => { if (original === undefined) delete globalThis.WebTransport; else globalThis.WebTransport = original; });
+  const sent = [], updates = [];
+  const engine = new ClassroomAudio('student', data => sent.push(data), () => {}, data => updates.push(data));
+  const stream = () => ({ getTracks: () => [{ stop() {}, enabled: false }] });
+  engine.stream = stream();
+  const first = engine.sync({ activeId: 's', grant: 9, mode: 'local', local: { url: 'https://127.0.0.1:4444', hash: 'a'.repeat(43), ticket: 'b'.repeat(43) } }, 's');
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(engine.localStage, 'connecting');
+  assert.equal(updates.some(update => update.localSending === true), false);
+  engine.stopAll();
+  engine.stream = stream(); let nextStarted = false;
+  engine.startRelay = async () => { nextStarted = true; };
+  await engine.sync({ activeId: 's', grant: 10, mode: 'relay' }, 's'); await first;
+  assert.equal(transport.wasClosed, true); assert.equal(nextStarted, true);
+  assert.equal(engine.grant, 10); assert.deepEqual(sent, []);
+});
+
+test('an old receiver close callback cannot disconnect a new control session', async t => {
+  const original = globalThis.WebTransport, transports = []; let failures = 0;
+  globalThis.WebTransport = class {
+    constructor() {
+      transports.push(this); this.ready = Promise.resolve();
+      this.closed = new Promise(resolve => { this.finishClose = resolve; });
+    }
+    async createBidirectionalStream() {
+      let output;
+      return {
+        readable: new ReadableStream({ start(controller) { output = controller; } }),
+        writable: new WritableStream({ write(bytes) {
+          const { id } = JSON.parse(new TextDecoder().decode(bytes));
+          output.enqueue(new TextEncoder().encode(JSON.stringify({ id, ok: true, stats: { received: 0 } }) + '\n'));
+        } }),
+      };
+    }
+    close() {}
+  };
+  const receiver = new LocalReceiver({ url: 'https://127.0.0.1:4444', hash: 'a'.repeat(43), key: 'b'.repeat(43) }, () => failures++);
+  t.after(() => { receiver.close(); if (original === undefined) delete globalThis.WebTransport; else globalThis.WebTransport = original; });
+  await receiver.connect(); receiver.close();
+  await new Promise(resolve => setImmediate(resolve));
+  await receiver.connect();
+  transports[0].finishClose({});
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(receiver.connected, true);
+  assert.equal(failures, 0);
+  await receiver.request('ping');
+});
+
+test('teacher startup distinguishes waiting, received audio and a bounded no-audio failure', async t => {
+  t.mock.timers.enable({ apis: ['setInterval'] });
+  let now = 0; t.mock.method(performance, 'now', () => now);
+  const sent = [], updates = [];
+  const engine = new ClassroomAudio('host', data => sent.push(data), () => {}, data => updates.push(data));
+  engine.localReceiver = { connected: true, armedTicket: 'ticket', stats: { received: 0 }, mute() {} };
+  t.after(() => engine.stopAll());
+  await engine.sync({ grant: 9, mode: 'local', local: { ticket: 'ticket' } });
+  assert.equal(updates.at(-1).status, 'Waiting for phone audio…');
+  now = 34999; t.mock.timers.tick(500); assert.deepEqual(sent, []);
+  now = 35000; t.mock.timers.tick(500);
+  assert.deepEqual(sent, [{ type: 'local-failed', grant: 9 }]);
+  assert.equal(engine.grant, 0);
+  assert.match(updates.at(-1).receiverError, /No audio reached/);
+
+  await engine.sync({ grant: 10, mode: 'local', local: { ticket: 'ticket' } });
+  engine.localReceiver.stats.received = 1; t.mock.timers.tick(500);
+  assert.equal(updates.at(-1).status, '');
+  now = 100000; t.mock.timers.tick(35000);
+  assert.equal(sent.length, 1); assert.equal(engine.grant, 10);
+});
+
+test('a stalled audio context times out, stops transmission and does not block the next request', async t => {
+  const original = globalThis.WebTransport; let transport, finishContext;
+  t.mock.timers.enable({ apis: ['setInterval'] });
+  let now = 0; t.mock.method(performance, 'now', () => now);
+  globalThis.WebTransport = class {
+    constructor() { transport = this; this.ready = Promise.resolve(); this.closed = new Promise(() => {}); this.datagrams = { writable: { getWriter: () => ({}) } }; }
+    close() { this.wasClosed = true; }
+  };
+  const sent = [], updates = [];
+  const engine = new ClassroomAudio('student', data => sent.push(data), () => {}, data => updates.push(data));
+  t.after(() => { engine.stopAll(); if (original === undefined) delete globalThis.WebTransport; else globalThis.WebTransport = original; });
+  const stream = () => ({ getTracks: () => [{ stop() {}, enabled: false }] });
+  engine.stream = stream(); engine.context = () => new Promise(resolve => { finishContext = resolve; });
+  const first = engine.sync({ activeId: 's', grant: 9, mode: 'local', local: { url: 'https://127.0.0.1:4444', hash: 'a'.repeat(43), ticket: 'b'.repeat(43) } }, 's');
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(engine.localStage, 'starting-capture');
+  now = 35000; t.mock.timers.tick(500); await first;
+  assert.equal(transport.wasClosed, true);
+  assert.deepEqual(sent, [{ type: 'local-failed', grant: 9 }]);
+  assert.match(updates.at(-1).status, /not sending audio/);
+  engine.stream = stream(); let nextStarted = false;
+  engine.startRelay = async () => { nextStarted = true; };
+  await engine.sync({ activeId: 's', grant: 10, mode: 'relay' }, 's');
+  finishContext({}); await new Promise(resolve => setImmediate(resolve));
+  assert.equal(nextStarted, true); assert.equal(engine.grant, 10);
+  assert.equal(engine.worklet, undefined); assert.equal(sent.length, 1);
 });

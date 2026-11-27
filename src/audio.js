@@ -2,6 +2,7 @@ import { FeedbackGuard } from './feedback.js';
 import { PcmPlayout } from './pcm-playout.js';
 import { LocalReceiver } from './local-receiver.js';
 import { openLocalAudioSender } from './local-audio-sender.js';
+import { abortable } from './abortable.js';
 
 export class ClassroomAudio {
   constructor(role, send, binary, update) {
@@ -58,7 +59,7 @@ export class ClassroomAudio {
     oscillator.onended = () => { oscillator.disconnect(); gain.disconnect(); };
     this.update({ outputReady: true });
   }
-  setVolume(value) { this.volume = value; if (this.gain) this.gain.gain.setTargetAtTime(value, this.ctx.currentTime, .02); if (this.remoteAudio) this.remoteAudio.volume = value; if (this.localReceiver?.connected) this.localReceiver.request('volume', { volume: value }).catch(() => this.localReceiver.fail()); }
+  setVolume(value) { this.volume = value; if (this.gain) this.gain.gain.setTargetAtTime(value, this.ctx.currentTime, .02); if (this.remoteAudio) this.remoteAudio.volume = value; if (this.localReceiver?.connected) this.localReceiver.request('volume', { volume: value }).catch(() => {}); }
   async prepare() {
     if (!window.isSecureContext) throw new Error('Microphone access requires HTTPS. Use the secure website address.');
     if (!navigator.mediaDevices?.getUserMedia) throw new Error('Microphone access is not supported. Open this page in Safari or Chrome.');
@@ -127,6 +128,10 @@ export class ClassroomAudio {
     this.micAnalyser?.disconnect(); this.micAnalyser = null;
   }
   cleanupConnection() {
+    clearInterval(this.localStartupMonitor); this.localStartupMonitor = null;
+    this.localSenderAbort?.abort(); this.localSenderAbort = null;
+    this.localStage = null; this.localSenderStats = null; this.localSent = null; this.localDropped = null;
+    this.update({ localSending: false });
     clearTimeout(this.localFailureTimer); this.localFailureTimer = null;
     this.localSending = false;
     this.localTransport?.close(); this.localTransport = null; this.localWriter = null;
@@ -256,47 +261,86 @@ export class ClassroomAudio {
   }
   async startLocal(grant, config) {
     this.status('Starting local audio…');
+    const current = () => !this.destroyed && this.grant === grant && this.desiredGrant === grant && this.mode === 'local' && this.desiredMode === 'local';
+    const began = performance.now();
     if (this.role === 'host') {
       if (!this.localReceiver?.connected || config?.ticket !== this.localReceiver.armedTicket) throw new Error('Pair the local receiver again.');
       this.pendingLocalApproval = false;
-      this.status(''); return;
-    }
-    const current = () => !this.destroyed && this.grant === grant && this.desiredGrant === grant && this.mode === 'local' && this.desiredMode === 'local';
-    this.localSenderStats = null;
-    const transport = await openLocalAudioSender(config, stats => {
-      if (!current()) return;
-      this.localSenderStats = stats; this.localSent = stats.sent; this.localDropped = stats.dropped;
-    }, data => (this.ctx?.currentTime || 0) - data.contextTime);
-    if (!current()) { transport.close(); return; }
-    this.localTransport = transport;
-    const failed = () => {
-      if (this.localTransport !== transport || !current()) return;
-      if (this.localFailureTimer) return;
-      // Some browsers hide the peer's close code. Give the authoritative
-      // mute/switch message time to arrive before reporting a network failure.
-      this.localFailureTimer = setTimeout(() => {
-        this.localFailureTimer = null;
-        if (this.localTransport !== transport || !current()) return;
+      this.status('Waiting for phone audio…');
+      this.localStartupMonitor = setInterval(() => {
+        if (!current()) return;
+        if (this.localReceiver.stats?.received > 0) { clearInterval(this.localStartupMonitor); this.localStartupMonitor = null; this.status(''); return; }
+        // Leave time for the phone's first-use network permission prompt, but
+        // never leave an approved microphone silently waiting indefinitely.
+        if (performance.now() - began < 35000) return;
         this.send({ type: 'local-failed', grant }); this.stopAll();
-        this.status('Local audio disconnected. Ask the teacher to check the receiver or select Browser audio.');
+        this.status('', { receiverError: 'No audio reached the receiver. Select Browser audio, then ask the student to request again.' });
       }, 500);
-    };
-    const closed = info => {
-      // Native revocation can arrive before the cloud's mute/speaker-switch
-      // state. A deliberate stop is not a connection failure.
-      if (info?.closeCode === 1 || info?.sessionErrorCode === 1) { if (this.localTransport === transport && current()) this.stopAll(); return; }
-      failed();
-    };
-    transport.closed.then(closed, closed);
-    const ctx = await this.context();
-    if (!this.localWorkletLoaded) { await ctx.audioWorklet.addModule('/local-pcm-worklet.js'); this.localWorkletLoaded = true; }
-    if (!current()) return;
-    const worklet = this.worklet = new AudioWorkletNode(ctx, 'local-pcm-capture');
-    worklet.addEventListener('processorerror', failed);
-    this.zero = ctx.createGain(); this.zero.gain.value = 0;
-    transport.attach(worklet);
-    this.voiceProcessor.connect(worklet); worklet.connect(this.zero); this.zero.connect(ctx.destination);
-    this.status('');
+      return;
+    }
+    const controller = this.localSenderAbort = new AbortController();
+    this.localStage = 'connecting'; this.localSenderStats = null;
+    this.localStartupMonitor = setInterval(() => {
+      if (!current()) return;
+      if (this.localStage === 'sending') { clearInterval(this.localStartupMonitor); this.localStartupMonitor = null; return; }
+      const elapsed = performance.now() - began;
+      if (elapsed >= 35000) {
+        const message = this.localStage === 'connecting'
+          ? 'Cannot reach the local receiver. Ask the teacher to select Browser audio, then request again.'
+          : 'The microphone is not sending audio. Keep this page open and request again.';
+        this.send({ type: 'local-failed', grant }); this.stopAll(); this.status(message);
+      } else if (elapsed >= 5000 && this.localStage === 'connecting') {
+        this.status('Still connecting. Allow local network access if prompted; keep both pages open.');
+      }
+    }, 500);
+    try {
+      const transport = await openLocalAudioSender(config, stats => {
+        if (!current()) return;
+        this.localSenderStats = stats; this.localSent = stats.sent; this.localDropped = stats.dropped;
+        if (stats.sent > 0 && this.localStage !== 'sending') {
+          this.localStage = 'sending'; this.status('', { localSending: true });
+        }
+      }, data => (this.ctx?.currentTime || 0) - data.contextTime, undefined, controller.signal);
+      if (!current()) { transport.close(); return; }
+      this.localTransport = transport;
+      this.localStage = 'starting-capture';
+      const failed = () => {
+        if (this.localTransport !== transport || !current()) return;
+        if (this.localFailureTimer) return;
+        // Some browsers hide the peer's close code. Give the authoritative
+        // mute/switch message time to arrive before reporting a network failure.
+        this.localFailureTimer = setTimeout(() => {
+          this.localFailureTimer = null;
+          if (this.localTransport !== transport || !current()) return;
+          this.send({ type: 'local-failed', grant }); this.stopAll();
+          this.status('Local audio disconnected. Ask the teacher to check the receiver or select Browser audio.');
+        }, 500);
+      };
+      const closed = info => {
+        // Native revocation can arrive before the cloud's mute/speaker-switch
+        // state. A deliberate stop is not a connection failure.
+        if (info?.closeCode === 1 || info?.sessionErrorCode === 1) { if (this.localTransport === transport && current()) this.stopAll(); return; }
+        failed();
+      };
+      transport.closed.then(closed, closed);
+      const ctx = await abortable(this.context(), controller.signal);
+      if (!current()) return;
+      if (!this.localWorkletLoaded) {
+        await abortable(ctx.audioWorklet.addModule('/local-pcm-worklet.js'), controller.signal);
+        this.localWorkletLoaded = true;
+      }
+      if (!current()) return;
+      const worklet = this.worklet = new AudioWorkletNode(ctx, 'local-pcm-capture');
+      worklet.addEventListener('processorerror', failed);
+      this.zero = ctx.createGain(); this.zero.gain.value = 0;
+      transport.attach(worklet);
+      this.voiceProcessor.connect(worklet); worklet.connect(this.zero); this.zero.connect(ctx.destination);
+      this.localStage = 'waiting-audio'; this.status('Waiting for microphone audio…');
+    } catch (e) {
+      // Cancellation belongs to the old speaking turn. It must not revoke a
+      // newer request or keep serialized startup blocked for the full timeout.
+      if (current()) throw e;
+    }
   }
   receivePcm(buffer) {
     if (!this.ctx || this.ctx.state !== 'running' || this.role !== 'host' || this.mode !== 'relay' || !this.grant) return;

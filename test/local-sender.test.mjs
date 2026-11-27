@@ -38,6 +38,18 @@ test('worker network rejection does not silently retry on the page', async () =>
   assert.equal(stopped, true);
 });
 
+test('cancelling a connecting worker stops it immediately and ignores late ready messages', { timeout: 1000 }, async () => {
+  const controller = new AbortController(), reports = [];
+  let stopped = 0;
+  const worker = { terminate() { stopped++; }, postMessage() {} };
+  const pending = openLocalAudioSender(config, stats => reports.push(stats), () => 0, () => worker, controller.signal);
+  assert.deepEqual(reports, [{ path: 'Worker', sent: null, dropped: null }]);
+  controller.abort();
+  await assert.rejects(pending, { name: 'AbortError' });
+  worker.onmessage({ data: { type: 'ready' } });
+  assert.equal(stopped, 1); assert.equal(reports.length, 1);
+});
+
 test('audio transfers directly over a MessagePort to the actual sender worker and stops on close', { timeout: 10000 }, async t => {
   const url = new URL('../src/local-sender-worker.js', import.meta.url).href;
   const bootstrap = `

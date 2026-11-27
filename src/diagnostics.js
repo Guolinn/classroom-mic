@@ -2,6 +2,15 @@
 const milliseconds = seconds => Number.isFinite(seconds) && seconds >= 0 ? Math.round(seconds * 1000) : null;
 const value = number => Number.isFinite(number) && number >= 0 ? number : null;
 const signedValue = number => Number.isFinite(number) ? number : null;
+export const localStageLabels = {
+  connecting: 'Connecting to receiver',
+  'starting-capture': 'Starting microphone processing',
+  'waiting-audio': 'Waiting for microphone audio',
+  sending: 'Sending audio',
+  'waiting-phone': 'Waiting for phone audio',
+  'audio-received': 'Audio received',
+  disconnected: 'Receiver disconnected',
+};
 
 export class AudioDiagnostics {
   async sample(engine) {
@@ -13,9 +22,21 @@ export class AudioDiagnostics {
     const settings = track?.getSettings?.() || {};
     const sender = active && mode === 'local' && engine.role === 'student' ? engine.localSenderStats : null;
     const localOutput = active && mode === 'local' && engine.role === 'host' ? engine.localReceiver?.stats : null;
+    let localStage = null;
+    if (active && mode === 'local') {
+      if (engine.role === 'host') {
+        localStage = engine.localReceiver?.connected === false ? 'disconnected'
+          : value(localOutput?.received) > 0 ? 'audio-received' : 'waiting-phone';
+      } else if (Object.hasOwn(localStageLabels, engine.localStage)) localStage = engine.localStage;
+    }
     const report = {
       role: engine.role,
       transport: active ? mode === 'local' ? 'Local receiver' : mode === 'relay' ? 'Server relay' : 'Direct WebRTC' : 'Inactive',
+      localStage,
+      audioContextState: ['running', 'suspended', 'interrupted', 'closed'].includes(engine.ctx?.state) ? engine.ctx.state : null,
+      microphoneTrackState: ['live', 'ended'].includes(track?.readyState) ? track.readyState : null,
+      microphoneEnabled: typeof track?.enabled === 'boolean' ? track.enabled : null,
+      pageVisibility: typeof document !== 'undefined' ? document.visibilityState : null,
       localQueueMs: active && mode === 'local' && engine.role === 'host' ? value(engine.localReceiver?.stats?.queueMs) : null,
       localTargetMs: active && mode === 'local' && engine.role === 'host' ? value(engine.localReceiver?.stats?.targetMs) : null,
       localUnderruns: active && mode === 'local' && engine.role === 'host' ? value(engine.localReceiver?.stats?.underruns) : null,
