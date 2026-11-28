@@ -77,10 +77,14 @@ func (p *playout) catchUp(now time.Time) {
 		p.buf[(newHead+i)%len(p.buf)] = int16(float64(samples[i])*(1-weight) + float64(samples[i+best])*weight)
 	}
 	p.head, p.size = newHead, p.size-best
+	// Blended samples have two source arrival times. Exclude this short region
+	// instead of reporting either timestamp as an exact residence measurement.
+	p.timingSkip = catchupOverlap
 	p.catchupBudget -= best
 	p.stats.Catchups++
 	p.stats.Compressed += uint64(best)
 	p.lastCatchup = now
+	p.backlogGoal = 0
 	// At most ~10% time compression; no repeated cuts on every output callback.
 	p.nextCatchup = now.Add(time.Duration(best) * time.Second / rate * 10)
 }

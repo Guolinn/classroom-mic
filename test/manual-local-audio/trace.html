@@ -1,0 +1,108 @@
+<!doctype html><html lang="en"><meta name="viewport" content="width=device-width, initial-scale=1"><meta charset="utf-8"><title>Playback trace</title>
+<style>body{font:18px system-ui;color:#17191f;max-width:900px;margin:24px auto;padding:20px;line-height:1.5}button{font:inherit;padding:10px 22px;margin:8px 8px 8px 0}img{display:block;width:320px;height:320px}pre{font:13px monospace;white-space:pre-wrap}h1{font-size:28px}</style>
+<h1>Playback trace</h1><p id="instruction"></p><button id="start">Start</button><button id="stop" hidden>Stop</button><p id="status">Ready</p><div id="join"></div><pre id="summary"></pre><details><summary>Measurements</summary><pre id="details"></pre></details>
+<script type="module">
+import QRCode from 'qrcode';
+import { ClassroomAudio } from '/src/audio.js';
+import { LocalReceiver } from '/src/local-receiver.js';
+import { AudioDiagnostics } from '/src/diagnostics.js';
+import { parseReceiverCode } from '/shared/local-receiver.js';
+import { playSyntheticSpeech } from './synthetic-playback.js';
+
+const params = new URLSearchParams(location.hash.slice(1));
+history.replaceState({}, '', location.pathname);
+const $ = selector => document.querySelector(selector);
+const status = $('#status'), start = $('#start'), stop = $('#stop');
+const original = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
+let active;
+function begin() {
+  const run = { abort: new AbortController(), failure: '', reports: [] };
+  active = run; start.disabled = true; stop.hidden = false;
+  return run;
+}
+async function finish(run = active) {
+  if (!run) return;
+  if (run.finishing) return run.finishing;
+  run.abort.abort(); clearInterval(run.poll); run.engine?.stopAll();
+  run.finishing = (async () => {
+    await run.engine?.destroy(); await run.receiver?.mute(); run.receiver?.close();
+    await run.wake?.release().catch(() => {});
+    if (active === run) {
+      active = null; status.textContent = 'Stopped.'; stop.hidden = true;
+      start.disabled = params.has('phone'); $('#join').replaceChildren();
+    }
+  })();
+  return run.finishing;
+}
+stop.onclick = () => finish();
+window.addEventListener('pagehide', () => { active?.abort.abort(); active?.engine?.stopAll(); active?.receiver?.close(); });
+
+if (params.has('receiver')) {
+  const config = parseReceiverCode(params.get('receiver'));
+  $('#instruction').textContent = 'The phone sends fixed speech for 10 seconds. Only generated speech and playback timing are saved on this Mac. No microphone is used.';
+  start.onclick = async () => {
+    const run = begin(), sampler = new AudioDiagnostics();
+    try {
+      run.receiver = new LocalReceiver(config, () => {
+        run.failure = 'Receiver disconnected. Start a new test from the computer.';
+        finish(run).then(() => { if (!active) status.textContent = run.failure; });
+      });
+      await run.receiver.connect();
+      if (run.abort.signal.aborted) return;
+      if (run.receiver.version !== '0.1.5-output-trace') throw Error('The silent inspection receiver is required.');
+      const local = await run.receiver.arm(.15);
+      const link = new URL(location.href);
+      // A fresh document avoids reusing a stopped Safari test via hash navigation.
+      link.searchParams.set('run', crypto.randomUUID());
+      link.hash = new URLSearchParams({ phone: btoa(JSON.stringify(local)) }).toString();
+      const img = new Image(); img.alt = 'Open silent check on iPhone';
+      img.src = await QRCode.toDataURL(link.href, { width: 640, margin: 2 });
+      if (run.abort.signal.aborted) return;
+      $('#join').replaceChildren(img);
+      status.textContent = 'Scan on iPhone and press Start. The computer will play fixed speech.';
+      run.poll = setInterval(async () => {
+        const report = await sampler.sample({ role: 'host', grant: 1, mode: 'local', localReceiver: run.receiver });
+        if (run.abort.signal.aborted) return;
+        if (report.localReceived > (run.reports.at(-1)?.localReceived || 0)) run.reports.push(report);
+        $('#summary').textContent = `Received ${run.reports.at(-1)?.localReceived || 0} packets. Fixed-speech playback.`;
+        $('#details').textContent = JSON.stringify(run.reports, null, 2);
+      }, 500);
+    } catch (error) { await finish(run); if (!active) status.textContent = error.message; }
+  };
+} else if (params.has('phone')) {
+  const local = JSON.parse(atob(params.get('phone')));
+  $('#instruction').textContent = 'No microphone access. Press Start and keep this page open for 10 seconds. The computer will play fixed speech at low volume.';
+  start.onclick = async () => {
+    const run = begin();
+    try {
+      run.engine = new ClassroomAudio('student', message => {
+        if (['local-failed', 'finish', 'cancel'].includes(message.type)) run.failure = 'Audio connection stopped. Start a new test from the computer.';
+      }, () => {}, update => {
+        if (update.status && !run.abort.signal.aborted) {
+          status.textContent = update.status;
+          if (run.failure) run.failure = update.status;
+        }
+      });
+      const ctx = await run.engine.context(); // Unlock during the user's tap.
+      try { run.wake = await navigator.wakeLock?.request('screen'); } catch {}
+      const encoded = await (await fetch(new URL('../../voice.wav', location.href), { signal: run.abort.signal })).arrayBuffer();
+      const voice = await ctx.decodeAudioData(encoded);
+      const destination = ctx.createMediaStreamDestination();
+      navigator.mediaDevices.getUserMedia = async () => destination.stream;
+      try { await run.engine.prepare(); } finally { navigator.mediaDevices.getUserMedia = original; }
+      await playSyntheticSpeech({ engine: run.engine, voice, destination, local,
+        signal: run.abort.signal, failure: () => run.failure, phaseCount: 1,
+        onPhase: phase => { status.textContent = `Sending fixed speech. The computer will play fixed speech.`; } });
+      await finish(run);
+      if (!active) status.textContent = 'Finished. No microphone was used. Results are on the Mac.';
+    } catch (error) {
+      const cancelled = run.abort.signal.aborted;
+      await finish(run);
+      if (!active && !cancelled) status.textContent = error.message;
+    }
+  };
+} else {
+  start.hidden = true;
+  $('#instruction').textContent = 'This test link has ended. Use a new QR code from the computer.';
+}
+</script></html>

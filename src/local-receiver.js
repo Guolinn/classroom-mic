@@ -70,6 +70,7 @@ export class LocalReceiver {
       while ((end = text.indexOf('\n')) >= 0) {
         const msg = JSON.parse(text.slice(0, end)); text = text.slice(end + 1);
         if (msg.stats) this.stats = msg.stats;
+        this.senderTiming = msg.senderTiming || null;
         if (typeof msg.version === 'string') this.version = msg.version;
         this.pending.get(msg.id)?.resolve(msg); this.pending.delete(msg.id);
       }
@@ -108,7 +109,7 @@ export class LocalReceiver {
 export async function connectLocalSender(config, signal) {
   if (!validLocalAudio(config)) throw new Error('Invalid local audio connection.');
   if (signal?.aborted) throw new DOMException('Cancelled.', 'AbortError');
-  const transport = openTransport(config, '/audio?ticket=' + encodeURIComponent(config.ticket));
+  const transport = openTransport(config, '/audio?ticket=' + encodeURIComponent(config.ticket) + '&timing=1');
   let abort;
   try {
     const cancelled = new Promise((_, reject) => {

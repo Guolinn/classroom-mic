@@ -1,9 +1,10 @@
 import { connectLocalSender } from './local-receiver.js';
 import { LocalSenderQueue } from './local-sender-queue.js';
+import { LocalAudioTiming } from './local-audio-timing.js';
 
-let transport, queue, port, timer, stopped = false;
+let transport, queue, timing, port, timer, stopped = false;
 function stop() {
-  stopped = true; clearInterval(timer); queue?.close(); port?.close(); transport?.close();
+  stopped = true; clearInterval(timer); queue?.close(); timing?.close(); port?.close(); transport?.close();
 }
 self.onmessage = async ({ data }) => {
   if (data.type === 'stop') { stop(); return; }
@@ -18,9 +19,14 @@ self.onmessage = async ({ data }) => {
     transport = connection.transport;
     if (stopped) { transport.close(); return; }
     const closed = info => { if (!stopped) self.postMessage({ type: 'closed', deliberate: info?.closeCode === 1 || info?.sessionErrorCode === 1 }); stop(); };
-    queue = new LocalSenderQueue(connection.writer, () => closed());
+    timing = new LocalAudioTiming(transport);
+    queue = new LocalSenderQueue(timing.writer(connection.writer), () => closed());
     transport.closed.then(closed, closed);
-    timer = setInterval(() => self.postMessage({ type: 'stats', stats: queue.stats }), 500);
+    timer = setInterval(() => {
+      timing.poll();
+      timing.publish(queue.stats);
+      self.postMessage({ type: 'stats', stats: { ...queue.stats, ...timing.snapshot() } });
+    }, 500);
     self.postMessage({ type: 'ready' });
   } catch (e) { if (!stopped) self.postMessage({ type: 'error', message: e.message }); stop(); }
 };

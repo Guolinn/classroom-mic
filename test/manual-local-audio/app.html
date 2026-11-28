@@ -1,0 +1,16 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MicTurn</title>
+<div id="root"></div>
+<script>
+  // Load the candidate bundle while keeping normal classroom routing and the
+  // existing session in this tab. No production HTML needs to be replaced.
+  const route = new URLSearchParams(location.search).get('route');
+  if (/^\/(host|join)\/\d{6}$/.test(route || '')) {
+    history.replaceState({}, '', route + location.hash);
+  }
+</script>
+<script type="module" src="/src/main.jsx"></script>
+</html>

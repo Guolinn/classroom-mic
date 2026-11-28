@@ -1,5 +1,6 @@
 import { connectLocalSender } from './local-receiver.js';
 import { LocalSenderQueue } from './local-sender-queue.js';
+import { LocalAudioTiming } from './local-audio-timing.js';
 
 function workerSender(config, onStats, makeWorker, signal) {
   return new Promise((resolve, reject) => {
@@ -46,10 +47,11 @@ export async function openLocalAudioSender(config, onStats, contextAge, makeWork
   onStats({ path: 'Page', sent: null, dropped: null });
   const { transport, writer } = await connectLocalSender(config, signal);
   let finish; const failed = new Promise(resolve => { finish = resolve; });
-  const queue = new LocalSenderQueue(writer, () => finish({}), { stale: data => contextAge(data) > .03 });
-  const publish = () => onStats({ path: 'Page', ...queue.stats });
+  const timing = new LocalAudioTiming(transport);
+  const queue = new LocalSenderQueue(timing.writer(writer), () => finish({}), { stale: data => contextAge(data) > .03 });
+  const publish = () => { timing.poll(); timing.publish(queue.stats); onStats({ path: 'Page', ...queue.stats, ...timing.snapshot() }); };
   const timer = setInterval(publish, 500); publish();
-  const close = () => { clearInterval(timer); queue.close(); transport.close(); signal?.removeEventListener('abort', close); };
+  const close = () => { clearInterval(timer); queue.close(); timing.close(); transport.close(); signal?.removeEventListener('abort', close); };
   signal?.addEventListener('abort', close, { once: true });
   if (signal?.aborted) { close(); throw new DOMException('Cancelled.', 'AbortError'); }
   return {

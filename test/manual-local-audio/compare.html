@@ -1,0 +1,43 @@
+<!doctype html><html lang="en"><meta name="viewport" content="width=device-width, initial-scale=1"><meta charset="utf-8"><title>Audio comparison</title>
+<style>body{font:18px system-ui;color:#17191f;max-width:900px;margin:24px auto;padding:20px;line-height:1.5}button{font:inherit;padding:10px 22px;margin:8px 8px 8px 0}img{display:block;width:320px;height:320px}pre{font:13px monospace;white-space:pre-wrap}h1{font-size:28px}</style>
+<h1>Audio comparison</h1><p id="instruction"></p><button id="start">Start</button><button id="stop" hidden>Stop</button><p id="status">Ready</p><div id="join"></div><pre id="summary"></pre><details><summary>Measurements</summary><pre id="details"></pre></details>
+<script type="module">
+import QRCode from 'qrcode';
+import {ClassroomAudio} from '/src/audio.js';
+import {LocalReceiver} from '/src/local-receiver.js';
+import {AudioDiagnostics} from '/src/diagnostics.js';
+import {parseReceiverCode} from '/shared/local-receiver.js';
+const params=new URLSearchParams(location.hash.slice(1));history.replaceState({},'',location.pathname);
+const $=s=>document.querySelector(s), status=$('#status'), start=$('#start'), stop=$('#stop');
+let receivers=[],engine,source,poll,stopped=false,wake;const original=navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
+const wait=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+const reports=[[],[]],samplers=[new AudioDiagnostics(),new AudioDiagnostics()];
+async function finish(){stopped=true;clearInterval(poll);source?.stop();source=null;engine?.stopAll();await engine?.destroy();navigator.mediaDevices.getUserMedia=original;for(const r of receivers){await r.mute();r.close()}await wake?.release();status.textContent='Stopped.';stop.hidden=true;start.disabled=false;}
+window.addEventListener('pagehide',()=>{engine?.stopAll();receivers.forEach(r=>r.close())});stop.onclick=finish;
+if(params.has('receiver')&&params.has('receiverB')){
+ $('#instruction').textContent='Keep this page visible. The phone will send fixed speech twice, using no microphone. Before and after each run are measured separately.';
+ const configs=[params.get('receiver'),params.get('receiverB')].map(parseReceiverCode);
+ start.onclick=async()=>{try{stopped=false;start.disabled=true;reports.forEach(r=>r.length=0);receivers=configs.map(c=>new LocalReceiver(c,()=>{status.textContent='Receiver disconnected. Start again.';start.disabled=false}));
+ const phases=[];for(let i=0;i<2;i++){await receivers[i].connect();phases.push({label:i?'After':'Before',local:await receivers[i].arm(.08)})}
+ const link=new URL(location.href);link.hash=new URLSearchParams({compare:btoa(JSON.stringify(phases))}).toString();
+ const img=new Image();img.alt='Open fixed-speech comparison on the iPhone';img.src=await QRCode.toDataURL(link.href,{width:640,margin:2});$('#join').replaceChildren(img);
+ status.textContent='Scan with iPhone, then press Start. No microphone access.';stop.hidden=false;
+ poll=setInterval(async()=>{for(let i=0;i<2;i++){const r=await samplers[i].sample({role:'host',grant:1,mode:'local',localReceiver:receivers[i]});const previous=reports[i].at(-1);if(r.localReceived>0&&r.localReceived>(previous?.localReceived||0))reports[i].push({at:Date.now(),...r});}
+ $('#summary').textContent=reports.map((r,i)=>`${i?'After':'Before'}: ${r.at(-1)?.localReceived||0} packets received`).join('\n');$('#details').textContent=JSON.stringify(reports,null,2);},500);
+ }catch(e){status.textContent=e.message;start.disabled=false;receivers.forEach(r=>r.close())}};
+}else if(params.has('compare')){
+ const phases=JSON.parse(atob(params.get('compare')));
+ $('#instruction').textContent='No microphone is used. You will hear the same fixed speech twice at low volume. Keep this page open for both 15-second runs.';
+ start.onclick=async()=>{try{stopped=false;start.disabled=true;stop.hidden=false;try{wake=await navigator.wakeLock?.request('screen')}catch{}
+ engine=new ClassroomAudio('student',()=>{},()=>{},s=>{if(s.status)status.textContent=s.status;});await engine.context();
+ const encoded=await(await fetch(new URL('../../voice.wav',location.href))).arrayBuffer();
+ for(let i=0;i<phases.length&&!stopped;i++){
+ navigator.mediaDevices.getUserMedia=async()=>{const ctx=engine.ctx, audio=await ctx.decodeAudioData(encoded.slice(0)),dest=ctx.createMediaStreamDestination();source=ctx.createBufferSource();source.buffer=audio;source.loop=true;source.connect(dest);source.start();return dest.stream;};
+ await engine.prepare();if(stopped)break;await engine.sync({activeId:'fixed-speech',grant:1,mode:'local',local:phases[i].local},'fixed-speech');status.textContent=phases[i].label+': listen to the fixed speech.';
+ for(let n=0;n<30&&!stopped;n++)await wait(500);
+ source?.stop();source=null;engine.stopAll();await wait(500);
+ }
+ await engine.destroy();engine=null;navigator.mediaDevices.getUserMedia=original;await wake?.release();stop.hidden=true;start.disabled=false;status.textContent=stopped?'Stopped.':'Finished. The computer has both measurements.';
+ }catch(e){await finish();status.textContent=e.message;}};
+}else{$('#instruction').textContent='Open the prepared comparison link on this Mac.';start.hidden=true;}
+</script></html>

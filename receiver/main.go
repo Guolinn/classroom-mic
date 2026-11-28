@@ -12,6 +12,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -35,13 +36,15 @@ import (
 	"github.com/quic-go/webtransport-go"
 )
 
-var version = "0.1.4"
+var version = "0.1.5"
 
 type receiver struct {
 	mu                        sync.Mutex
 	player                    *playout
+	output                    *audioOutput
 	pairToken, origin, ticket string
 	control, audio            *webtransport.Session
+	senderTiming              map[string]float64
 }
 
 func secret() string {
@@ -59,7 +62,9 @@ func (r *receiver) mute() {
 	old := r.audio
 	r.audio = nil
 	r.ticket = ""
+	r.senderTiming = nil
 	r.player.reset()
+	r.output.stop()
 	r.mu.Unlock()
 	if old != nil {
 		old.CloseWithError(1, "Microphone stopped")
@@ -106,29 +111,47 @@ func (r *receiver) serveControl(s *webtransport.Session) {
 			r.mute()
 		case "test":
 			r.mute()
+			r.mu.Lock()
+			err := r.output.start()
+			if err != nil {
+				r.mu.Unlock()
+				return
+			}
 			r.player.testTone()
+			r.output.stopAfter(750 * time.Millisecond)
+			r.mu.Unlock()
 		case "ping", "volume":
 		default:
 			return
 		}
-		response, _ := json.Marshal(map[string]any{"id": msg.ID, "ok": true, "version": version, "stats": r.player.snapshot()})
+		r.mu.Lock()
+		senderTiming := r.senderTiming
+		r.mu.Unlock()
+		response, _ := json.Marshal(map[string]any{"id": msg.ID, "ok": true, "version": version, "stats": r.player.snapshot(), "senderTiming": senderTiming})
 		stream.SetWriteDeadline(time.Now().Add(time.Second))
 		if _, err := stream.Write(append(response, '\n')); err != nil {
 			return
 		}
 	}
 }
-func (r *receiver) serveAudio(s *webtransport.Session, ticket string) {
+func (r *receiver) serveAudio(s *webtransport.Session, ticket string, measure bool) {
+	var replies chan<- uint32
+	if measure {
+		replies = receiptReplies(s.Context(), s.SendDatagram)
+	}
 	defer func() {
 		r.mu.Lock()
 		if r.audio == s {
 			r.audio = nil
+			r.senderTiming = nil
 			r.player.reset()
+			r.output.stop()
 		}
 		r.mu.Unlock()
 		s.CloseWithError(0, "Audio closed")
 	}()
 	window, count := time.Now(), 0
+	lastTiming := time.Time{}
 	for {
 		packet, err := s.ReceiveDatagram(s.Context())
 		if err != nil {
@@ -147,8 +170,27 @@ func (r *receiver) serveAudio(s *webtransport.Session, ticket string) {
 			r.mu.Unlock()
 			return
 		}
+		if measure && len(packet) >= 4 && string(packet[:4]) == "MTS1" {
+			if now.Sub(lastTiming) >= 400*time.Millisecond {
+				if summary := parseSenderTiming(packet); summary != nil {
+					r.senderTiming = summary
+					lastTiming = now
+				}
+			}
+			r.mu.Unlock()
+			continue
+		}
 		valid := r.player.push(packet, now)
 		r.mu.Unlock()
+		// Sampled receipt confirmation. The browser measures a round trip using
+		// its own monotonic clock; no cross-device clock subtraction is needed.
+		// Older clients may ignore these eight-byte replies safely.
+		if valid && replies != nil && binary.LittleEndian.Uint32(packet[4:8])%20 == 0 {
+			select {
+			case replies <- binary.LittleEndian.Uint32(packet[4:8]):
+			default:
+			}
+		}
 		if !valid && (len(packet) != 492 || string(packet[:4]) != "MT01") {
 			return
 		}
@@ -240,6 +282,13 @@ func run() error {
 		return err
 	}
 	r := &receiver{player: newPlayout(), pairToken: secret(), origin: *origin}
+	r.output = &audioOutput{open: func() (func(), error) {
+		if *silent {
+			return func() {}, nil
+		}
+		return audioDevice(r.player)
+	}}
+	defer r.output.shutdown()
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	if *silent {
@@ -256,12 +305,6 @@ func run() error {
 				}
 			}
 		}()
-	} else {
-		closeAudio, err := audioDevice(r.player)
-		if err != nil {
-			return fmt.Errorf("cannot open the selected sound output: %w", err)
-		}
-		defer closeAudio()
 	}
 	h3 := &http3.Server{Addr: net.JoinHostPort(*address, fmt.Sprint(*port)), TLSConfig: http3.ConfigureTLSConfig(&tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS13}), QUICConfig: &quic.Config{EnableDatagrams: true, EnableStreamResetPartialDelivery: true, MaxIncomingStreams: 4, MaxIncomingUniStreams: 8, MaxIdleTimeout: 10 * time.Second}}
 	webtransport.ConfigureHTTP3Server(h3)
@@ -294,12 +337,18 @@ func run() error {
 			http.Error(w, "Not approved", 403)
 			return
 		}
+		// Ready the device before the phone is permitted to send its first frame.
+		if err := r.output.start(); err != nil {
+			http.Error(w, "Audio output unavailable", 503)
+			return
+		}
 		s, err := srv.Upgrade(w, req)
 		if err != nil {
+			r.output.stop()
 			return
 		}
 		r.audio = s
-		go r.serveAudio(s, ticket)
+		go r.serveAudio(s, ticket, req.URL.Query().Get("timing") == "1")
 	})
 	listener, err := net.ListenPacket("udp", h3.Addr)
 	if err != nil {

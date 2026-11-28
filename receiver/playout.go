@@ -33,12 +33,20 @@ type audioStats struct {
 	OutputBlockMs   float64  `json:"outputBlockMs"`
 	Catchups        uint64   `json:"catchups"`
 	Compressed      uint64   `json:"compressedSamples"`
+	ResidenceMedian *float64 `json:"residenceMedianMs"`
+	ResidenceP95    *float64 `json:"residenceP95Ms"`
+	ResidenceCount  int      `json:"residenceSamples"`
+	BacklogSpeedup  float64  `json:"backlogSpeedupPercent"`
 }
 
 type playout struct {
 	mu                       sync.Mutex
 	buf                      [8192]int16
 	boundary                 [8192]bool
+	arrived                  [8192]time.Time
+	residence                residenceTiming
+	timingSkip               int
+	backlogRate, backlogGoal float64
 	head, size, target       int
 	started, seen            bool
 	seq                      uint32
@@ -66,6 +74,9 @@ func (p *playout) reset() {
 	p.head, p.size, p.target = 0, 0, frameSamples
 	p.started, p.seen = false, false
 	p.stats = audioStats{}
+	p.residence = residenceTiming{}
+	p.timingSkip = 0
+	p.backlogRate, p.backlogGoal = 0, 0
 	p.tone = 0
 	p.lastPacket = time.Time{}
 	p.resumeAt = time.Time{}
@@ -89,7 +100,6 @@ func (p *playout) setVolume(v float64) {
 func (p *playout) testTone() { p.mu.Lock(); p.tone = rate / 3; p.mu.Unlock() }
 func (p *playout) snapshot() audioStats {
 	p.mu.Lock()
-	defer p.mu.Unlock()
 	s := p.stats
 	s.QueueMs = float64(p.size) / 48
 	s.TargetMs = float64(p.target) / 48
@@ -98,12 +108,18 @@ func (p *playout) snapshot() audioStats {
 		s.QueueFloorMs, s.QueuePeakMs = &floor, &peak
 	}
 	s.ClockCorrection = (p.clock.rate - 1) * 1e6
+	s.BacklogSpeedup = p.backlogRate * 100
+	timing := p.residence
+	p.mu.Unlock()
+	// Sorting diagnostics must not hold the lock needed by the audio callback.
+	s.ResidenceMedian, s.ResidenceP95, s.ResidenceCount = timing.snapshot()
 	return s
 }
 
-func (p *playout) appendSample(sample int16, boundary bool) {
+func (p *playout) appendSample(sample int16, boundary bool, arrived time.Time) {
 	i := (p.head + p.size) % len(p.buf)
 	p.buf[i], p.boundary[i] = sample, boundary
+	p.arrived[i] = arrived
 	p.size++
 }
 func (p *playout) beginSplice() {
@@ -124,6 +140,7 @@ func (p *playout) clearQueue() {
 	p.resumeAt = time.Time{}
 	p.clock = newSampleClock()
 	p.catchupBudget = 0
+	p.backlogRate, p.backlogGoal = 0, 0
 	if p.hadAudio {
 		p.beginSplice()
 	}
@@ -156,7 +173,7 @@ func (p *playout) push(b []byte, now time.Time) bool {
 		// Smooth both ends of short losses instead of hard-cutting to/from zero.
 		if gap <= 2 && p.size+int(gap+1)*frameSamples <= maxQueuedSamples {
 			for i := 0; i < int(gap)*frameSamples; i++ {
-				p.appendSample(0, i == 0)
+				p.appendSample(0, i == 0, time.Time{})
 			}
 			gapBoundary = true
 		} else {
@@ -182,7 +199,7 @@ func (p *playout) push(b []byte, now time.Time) bool {
 		p.resumeAt = now.Add(5 * time.Millisecond)
 	}
 	for i := 0; i < frameSamples; i++ {
-		p.appendSample(int16(binary.LittleEndian.Uint16(b[12+i*2:])), gapBoundary && i == 0)
+		p.appendSample(int16(binary.LittleEndian.Uint16(b[12+i*2:])), gapBoundary && i == 0, now)
 	}
 	p.seq, p.seen, p.lastPacket = seq, true, now
 	p.stats.Received++
@@ -209,6 +226,7 @@ func (p *playout) render(out []byte, now time.Time) {
 		p.hadAudio, p.splicePending = false, false
 		p.clock = newSampleClock()
 		p.catchupBudget = 0
+		p.backlogRate, p.backlogGoal = 0, 0
 		return
 	}
 	if p.tone > 0 {
@@ -236,6 +254,16 @@ func (p *playout) render(out []byte, now time.Time) {
 		}
 	}
 	p.catchUp(now)
+	// If matching cannot shorten an aperiodic waveform, drain persistent excess
+	// with a small, smoothly varying resampling rate. This can temporarily alter
+	// pitch/tempo; it avoids the hard cuts that previously caused crackling.
+	if now.Sub(p.lastPacket) > 20*time.Millisecond {
+		p.backlogGoal = 0
+	}
+	p.backlogRate += (p.backlogGoal - p.backlogRate) * min(1, float64(len(out)/2)/rate/.05)
+	if p.started && p.size > 0 && p.timingSkip == 0 && p.spliceLeft == 0 && !p.splicePending && !p.boundary[p.head] {
+		p.residence.observe(p.arrived[p.head], now)
+	}
 	for i := 0; i+1 < len(out); i += 2 {
 		if p.started && p.size == 0 {
 			p.started = false
@@ -245,6 +273,7 @@ func (p *playout) render(out []byte, now time.Time) {
 			p.beginSplice()
 			p.clock.phase = 0
 			p.catchupBudget = 0
+			p.backlogRate, p.backlogGoal = 0, 0
 			p.lastStarved = now
 			// If the network becomes unstable soon after shortening the queue,
 			// pause catch-up to avoid repeatedly trading fresh underruns for delay.
@@ -264,7 +293,7 @@ func (p *playout) render(out []byte, now time.Time) {
 			if p.size > 1 && !p.boundary[next] {
 				sample += (float64(p.buf[next]) - sample) * p.clock.phase
 			}
-			p.clock.phase += p.clock.rate
+			p.clock.phase += p.clock.rate + p.backlogRate
 			consume := int(p.clock.phase)
 			p.clock.phase -= float64(consume)
 			if consume >= p.size {
@@ -278,6 +307,7 @@ func (p *playout) render(out []byte, now time.Time) {
 				p.head = (p.head + 1) % len(p.buf)
 				p.size--
 			}
+			p.timingSkip = max(0, p.timingSkip-consume)
 			p.hadAudio = true
 			p.stats.Played += uint64(consume)
 		}
@@ -291,6 +321,14 @@ func (p *playout) render(out []byte, now time.Time) {
 			// queue drains normally is not evidence of disposable extra delay.
 			if p.clock.floorMs > 20 && now.Sub(p.lastStarved) >= time.Second {
 				p.catchupBudget = int(p.clock.floorMs*48) - catchupReserve
+			}
+			p.backlogGoal = 0
+			if now.Sub(p.lastStarved) >= time.Second && now.Sub(p.lastCatchup) >= time.Second && !now.Before(p.catchupHold) {
+				if p.clock.floorMs > 20 || (p.backlogRate > .0001 && p.clock.floorMs > 10) {
+					// At most +1.8%, in addition to the existing +/-0.2% clock
+					// correction. Fade out as the completed minimum approaches 8 ms.
+					p.backlogGoal = min(.018, max(0, (p.clock.floorMs-8)/1500))
+				}
 			}
 		}
 	}

@@ -1,6 +1,8 @@
 # MicTurn local receiver — experimental
 
-Version 0.1.4 adds waveform-aligned catch-up when a network stall leaves persistently excessive queued audio. It shortens similar waveform sections with crossfades, keeps the existing small clock correction, and pauses catch-up if starvation returns soon afterward. Audio details reports catch-up events and the cumulative audio duration compressed. Constant large arrival bursts still require buffering; this cannot play packets before they arrive and is not a zero-latency claim. The 120 ms ceiling is unchanged. Quit the older receiver before opening this version. Refresh both browser pages and create a new class from the newly opened receiver tab. The teacher's Audio details shows the connected receiver version.
+Version 0.1.5 opens the sound output when an approved phone connects, rather than leaving the device running silently while waiting. Mute, disconnection and a completed test tone release the output; the next speaking turn opens it again. This change addressed distorted live playback in an iPhone-to-Mac check where replaying the same samples sounded clean. It does not establish a general CoreAudio defect or guarantee compatibility with every output device.
+
+This version also measures packet receipt round trips and receiver arrival-to-render time. If a network stall leaves excess queued audio that waveform matching cannot safely shorten, a smoothly varying playback speed increase of at most 1.8% drains the backlog. This can temporarily change pitch and tempo slightly. The existing clock correction, bounded queue and starvation backoff remain. Repeated large arrival gaps still require buffering; the receiver cannot play packets before they arrive. Quit the older receiver, open this version, and refresh both browser pages. The teacher's Audio details shows the connected receiver version.
 
 This Mac receiver lets students keep using the website while sending audio over local WebTransport datagrams instead of the browser WebRTC audio path. It is an alternative transport, not a zero-latency guarantee. Physical iPhone-to-classroom-speaker latency has not been measured for this release.
 
@@ -32,9 +34,13 @@ The existing browser capture settings, high-pass filter, feedback guard and 3 ms
 
 Student Audio details distinguishes the sender path, maximum worklet callback gap, worklet-to-sender handoff, send interval and write completion. Callback and handoff timestamps use the same device's wall clock and may be rounded by the browser. They exclude delays before the worklet receives the microphone data; write completion is not a network round-trip measurement. No audio content, network addresses or pairing credentials are included.
 
+New receivers acknowledge one in every 20 audio packets. The sender measures that round trip with its own monotonic clock and passes a bounded numerical summary to the paired Mac. These acknowledgements include browser and receiver scheduling and cannot be divided by two to establish one-way latency. Arrival-to-render measures time inside the receiver, excluding microphone capture, network transit and hardware playback. The recent median and 95th percentile use bounded windows; combined or cross-device timestamps are not presented as total latency. Older receivers continue to work without these measurements.
+
 The native receiver starts with 5 ms queued audio and adds 5 ms after an underrun up to a 20 ms sample-count target. After starvation it also waits at least 5 ms from the first replacement packet before resuming, so a large arrival batch cannot bypass recovery simply by exceeding the sample target. It permits temporary bursts up to 120 ms of queued audio. That ceiling is not a fixed startup delay, but preserving a large burst does allow a larger temporary queue than the old 50 ms ceiling. When the ceiling is exceeded it removes only the oldest excess samples and keeps playback running. Each new speaker starts fresh. Late/reordered sequence numbers are discarded; up to two missing packets become silence, with one millisecond of blending at both boundaries. Starvation, recovery and queue trimming use the same blending to avoid hard waveform jumps. An arrival gap over 250 ms clears stale audio; explicit mute, revocation and heartbeat expiry still silence immediately. This is basic loss handling, not advanced speech reconstruction. These bounds cover application queues, **not** all browser, network, OS, device or acoustic latency. Capture timestamps are not synchronized across devices, so no complete one-way latency is inferred.
 
 CoreAudio output uses malgo/miniaudio at 48 kHz with a requested 128-frame period and two periods. The OS/device may choose different buffering. This prototype uses a short mutex-protected Go audio queue; it does not claim hard real-time scheduling guarantees. Sound output is native, not another browser audio element. The cloud server still handles speaking permissions, so Internet is needed to manage the class even though local audio does not go through the cloud.
+
+In physical iPhone checks, both generated speech and a live microphone sounded clean to the listener with deferred output. The live microphone check used the normal request/approval workflow. Packet gaps still reached about 100 ms and median receiver residence was about 100 ms; these are separate stages, not total mouth-to-speaker delay. Replaying a roughly ten-second arrival trace with a hard 20 ms queue ceiling caused 21 underruns and discarded about 1.5 seconds of audio, so that lower ceiling is not used. A deterministic single-stall test verifies that persistent excess buffering drains after delivery returns to normal, without additional underruns. This does not imply the same recovery is possible while large network gaps keep recurring.
 
 ## Build and test
 
@@ -44,6 +50,10 @@ On macOS, install Go 1.25 or later and Xcode Command Line Tools. Dependencies ar
 go test -race ./...
 sh build-mac.sh
 ```
+
+An optional hardware lifecycle check plays three quiet test tones and verifies that callbacks stop between uses: `MICTURN_TEST_NATIVE_OUTPUT=1 go test -run TestNativeOutputLifecycle -v .`. It does not access a microphone or record audio. Ordinary tests do not open the speaker. Manual browser checks live in `test/manual-local-audio/` and are not bundled into the production application.
+
+See [physical checks and remaining latency](../docs/native-audio-validation.md) for measured results and rejected experiments.
 
 The download is generated in `../public/downloads/`; build output and downloads are ignored by Git. The build includes third-party license notices and SHA-256 checksums. MicTurn itself remains source-visible with no open-source license grant added by this change.
 

@@ -22,6 +22,7 @@ export class AudioDiagnostics {
     const settings = track?.getSettings?.() || {};
     const sender = active && mode === 'local' && engine.role === 'student' ? engine.localSenderStats : null;
     const localOutput = active && mode === 'local' && engine.role === 'host' ? engine.localReceiver?.stats : null;
+    const timing = sender || (active && mode === 'local' && engine.role === 'host' ? engine.localReceiver?.senderTiming : null);
     let localStage = null;
     if (active && mode === 'local') {
       if (engine.role === 'host') {
@@ -56,12 +57,24 @@ export class AudioDiagnostics {
       localOutputBlockMs: value(localOutput?.outputBlockMs),
       localCatchupEvents: value(localOutput?.catchups),
       localCatchupMs: milliseconds(value(localOutput?.compressedSamples) === null ? undefined : localOutput.compressedSamples / 48000),
+      localResidenceMedianMs: value(localOutput?.residenceMedianMs),
+      localResidenceP95Ms: value(localOutput?.residenceP95Ms),
+      localResidenceSamples: value(localOutput?.residenceSamples),
+      localBacklogSpeedupPercent: value(localOutput?.backlogSpeedupPercent),
+      localReceiptMedianMs: value(timing?.receiptMedianMs),
+      localReceiptP95Ms: value(timing?.receiptP95Ms),
+      localReceiptSamples: value(timing?.receiptSamples),
+      localTransportRttMs: value(timing?.transportRttMs),
+      localTransportMinRttMs: value(timing?.transportMinRttMs),
+      localTransportRttVariationMs: value(timing?.transportRttVariationMs),
+      localTransportExpired: value(sender?.transportExpired),
+      localTransportLost: value(sender?.transportLost),
       localSent: active && mode === 'local' && engine.role === 'student' ? value(engine.localSent) : null,
       localSenderPath: sender?.path ?? null,
-      localMaxCaptureGapMs: value(sender?.maxCaptureGapMs),
-      localMaxDispatchLagMs: value(sender?.maxDispatchLagMs),
-      localMaxSendGapMs: value(sender?.maxSendGapMs),
-      localMaxWriteMs: value(sender?.maxWriteMs),
+      localMaxCaptureGapMs: value(timing?.maxCaptureGapMs),
+      localMaxDispatchLagMs: value(timing?.maxDispatchLagMs),
+      localMaxSendGapMs: value(timing?.maxSendGapMs),
+      localMaxWriteMs: value(timing?.maxWriteMs),
       connection: active && mode === 'direct' ? peer?.connectionState || 'connecting' : null,
       peerRoundTripMs: null,
       receiverJitterMs: null,

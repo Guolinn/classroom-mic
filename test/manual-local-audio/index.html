@@ -1,0 +1,41 @@
+<!doctype html><html lang="en"><meta name="viewport" content="width=device-width, initial-scale=1"><meta charset="utf-8"><title>Audio test</title>
+<style>body{font:18px system-ui;color:#17191f;max-width:850px;margin:30px auto;padding:20px;line-height:1.5}button{font:inherit;padding:10px 22px;margin:8px 8px 8px 0}img{display:block;width:240px;height:240px}pre{font:13px monospace;white-space:pre-wrap}a{overflow-wrap:anywhere}h1{font-size:28px}</style>
+<h1>Audio test</h1><p id="instruction"></p><button id="start">Start</button><button id="stop" hidden>Stop</button><p id="status">Ready</p><div id="join"></div><pre id="details"></pre>
+<script type="module">
+import QRCode from 'qrcode';
+import {ClassroomAudio} from '/src/audio.js';
+import {LocalReceiver} from '/src/local-receiver.js';
+import {AudioDiagnostics} from '/src/diagnostics.js';
+import {parseReceiverCode} from '/shared/local-receiver.js';
+const params=new URLSearchParams(location.hash.slice(1));history.replaceState({},'',location.pathname);
+const $=s=>document.querySelector(s), status=$('#status'), details=$('#details'), start=$('#start'), stop=$('#stop');
+let receiver, engine, poll, deadline, wake, lastReport, seen=false;
+const sampler=new AudioDiagnostics();
+const display=async()=>{
+ const report=await sampler.sample(engine);
+ if(report?.localReceived>0){seen=true;lastReport=report;}
+ if(report?.localReceived>0||!lastReport) details.textContent=JSON.stringify(report,null,2);
+ if(seen&&report.localReceived===0){clearInterval(poll);status.textContent='Finished. Measurement kept below.';details.textContent=JSON.stringify(lastReport,null,2);}
+};
+async function finish(){clearTimeout(deadline);if(engine?.role==='student'){engine.stopAll();await wake?.release();status.textContent='Finished. The computer has the measurements.';}else{clearInterval(poll);await receiver?.mute();receiver?.close();status.textContent='Stopped.';}stop.hidden=true;}
+window.addEventListener('pagehide',()=>{engine?.stopAll();receiver?.close();});stop.onclick=finish;
+if(params.has('receiver')){
+ const config=parseReceiverCode(params.get('receiver'));
+ $('#instruction').textContent='Keep this teacher page visible. Start, then open the QR code on the iPhone. The test ends after 30 seconds. Timing stays on the phone and this Mac.';
+ receiver=new LocalReceiver(config,()=>{status.textContent='Receiver disconnected. Keep this page visible and start again.';start.disabled=false;});
+ engine={role:'host',grant:1,mode:'local',localReceiver:receiver};
+ start.onclick=async()=>{try{start.disabled=true;lastReport=null;seen=false;clearInterval(poll);await receiver.connect();const local=await receiver.arm(.15);
+ const join=new URL(location.href);join.hash='phone='+btoa(JSON.stringify(local));
+ const img=new Image();img.alt='Open the audio test on your phone';img.src=await QRCode.toDataURL(join.href,{width:480,margin:2});
+ const link=document.createElement('a');link.href=join.href;link.textContent='Open phone test';$('#join').replaceChildren(img,link);
+ status.textContent='Waiting for phone. Say a short sentence after pressing Start on the phone.';stop.hidden=false;poll=setInterval(display,500);
+ }catch(e){status.textContent=e.message;start.disabled=false;}};
+}else if(params.has('phone')){
+ const config=JSON.parse(atob(params.get('phone')));
+ $('#instruction').textContent='Keep this page open. Press Start, allow the microphone, and say a few sentences. Stops after 30 seconds. No recording is saved.';
+ engine=new ClassroomAudio('student',()=>{},()=>{},s=>{if(s.status)status.textContent=s.status;else if(s.localSending)status.textContent='Sending audio. Continue speaking normally.';});
+ start.onclick=async()=>{try{start.disabled=true;stop.hidden=false;await engine.prepare();try{wake=await navigator.wakeLock?.request('screen')}catch{}
+ await engine.sync({activeId:'test',grant:1,mode:'local',local:config},'test');deadline=setTimeout(finish,30000);
+ }catch(e){engine.stopAll();status.textContent=e.message;start.disabled=false;stop.hidden=true;}};
+}else{$('#instruction').textContent='Open the test link provided on this Mac.';start.hidden=true;}
+</script></html>
